@@ -74,6 +74,12 @@ func (m *Manager) connect(ctx context.Context, name string, cfg ServerConfig) er
 	// Create MCP client
 	cli := client.NewClient(stdioTransport)
 
+	// Start the stdio subprocess first
+	if err := cli.Start(ctx); err != nil {
+		cli.Close()
+		return fmt.Errorf("failed to start MCP server %s: %w", name, err)
+	}
+
 	// Initialize the session
 	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -107,14 +113,9 @@ func (m *Manager) CallTool(ctx context.Context, serverName, toolName string, arg
 		return nil, fmt.Errorf("MCP server %s not connected", serverName)
 	}
 
-	argsBytes, err := json.Marshal(args)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal args: %w", err)
-	}
-
 	callReq := mcp.CallToolRequest{}
 	callReq.Params.Name = toolName
-	callReq.Params.Arguments = argsBytes
+	callReq.Params.Arguments = args // map[string]any → JSON object (NOT []byte → base64)
 
 	result, err := inst.cli.CallTool(ctx, callReq)
 	if err != nil {
@@ -161,6 +162,17 @@ func (m *Manager) ListTools(ctx context.Context, serverName string) ([]ToolDef, 
 		})
 	}
 	return tools, nil
+}
+
+// ServerNames returns the names of all configured MCP servers.
+func (m *Manager) ServerNames() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	names := make([]string, 0, len(m.configs))
+	for name := range m.configs {
+		names = append(names, name)
+	}
+	return names
 }
 
 // Close disconnects from all MCP servers.

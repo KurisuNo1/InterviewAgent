@@ -5,6 +5,16 @@ CREATE DATABASE IF NOT EXISTS interview_agent DEFAULT CHARACTER SET utf8mb4 COLL
 
 USE interview_agent;
 
+-- Users (auth)
+CREATE TABLE IF NOT EXISTS users (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(64) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Demo user (demo/demo123) is seeded at application startup via wire.go
+
 -- Interview sessions
 CREATE TABLE IF NOT EXISTS interview_sessions (
     id VARCHAR(36) PRIMARY KEY,

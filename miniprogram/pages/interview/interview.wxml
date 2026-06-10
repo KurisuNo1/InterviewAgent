@@ -1,0 +1,152 @@
+<view class="container" style="padding-bottom: {{kbHeight}}px;">
+  <!-- Phase: JD Input -->
+  <view wx:if="{{phase==='jd'}}" class="phase-card">
+    <view class="card-title">岗位描述 (JD)</view>
+    <text class="card-desc">输入目标岗位的 JD 内容，AI 将分析岗位要求并生成面试题。</text>
+
+    <!-- Resume pending session banner -->
+    <view wx:if="{{pendingSession}}" class="resume-banner">
+      <view class="resume-banner-icon">!</view>
+      <view class="resume-banner-body">
+        <text class="resume-banner-text">你有未完成的面试（{{pendingSession.status}}）</text>
+        <view class="resume-banner-actions">
+          <button class="btn-resume" bindtap="resumePendingSession">恢复</button>
+          <button class="btn-dismiss" bindtap="dismissPending">放弃</button>
+        </view>
+      </view>
+    </view>
+
+    <textarea class="jd-input" value="{{jdText}}" placeholder="粘贴岗位 JD 内容..." bindinput="onJDInput"/>
+    <button class="btn-primary" bindtap="startJD" loading="{{parsing}}" disabled="{{parsing}}">{{parsing ? '解析中...' : '开始解析'}}</button>
+
+    <view wx:if="{{historyList.length}}" style="margin-top:44rpx">
+      <view class="section-title">历史记录</view>
+      <view wx:for="{{historyList}}" wx:key="id" class="hist-item" data-sid="{{item.id}}" bindtap="viewPastReport">
+        <text class="hist-preview">{{item.last_message||item.status}}</text>
+        <view class="hist-row">
+          <text class="hist-score {{item.overall_score>=8?'high':item.overall_score>=5?'mid':'low'}}">{{item.overall_score.toFixed(1)}}分</text>
+          <text class="hist-date">{{item.created_at}}</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- Phase: Resume Upload -->
+  <view wx:if="{{phase==='resume'}}" class="phase-card">
+    <view class="card-title">上传简历</view>
+    <text class="card-desc">上传简历文件或直接粘贴内容，AI 将对比 JD 分析匹配度。</text>
+
+    <view wx:if="{{jdResult}}" class="jd-summary">
+      <view class="jd-summary-header">
+        <view class="jd-summary-icon">JD</view>
+        <view>
+          <text class="jd-pos">{{jdResult.position||'未指定岗位'}}</text>
+          <text class="jd-level">{{jdResult.level||'未指定级别'}}</text>
+        </view>
+      </view>
+      <view wx:if="{{jdResult.tech_stack&&jdResult.tech_stack.length}}" class="jd-divider"></view>
+      <view wx:if="{{jdResult.tech_stack&&jdResult.tech_stack.length}}" class="tags">
+        <text wx:for="{{jdResult.tech_stack}}" wx:key="*this" class="tag">{{item}}</text>
+      </view>
+    </view>
+
+    <button class="btn-secondary" bindtap="chooseResumeFile" style="margin-bottom:20rpx">选择文件</button>
+    <textarea class="jd-input" value="{{resumeText}}" placeholder="或直接粘贴简历内容..." bindinput="onResumeInput"/>
+    <button class="btn-primary" bindtap="uploadResume" loading="{{uploading}}" disabled="{{uploading}}">{{uploading ? '分析中...' : '上传并匹配'}}</button>
+    <button class="btn-secondary" bindtap="skipResume" style="margin-top:16rpx">跳过，直接面试</button>
+  </view>
+
+  <!-- Phase: Interview -->
+  <view wx:if="{{phase==='interview'}}" class="interview-container">
+    <view class="iv-header">
+      <view class="iv-header-left">
+        <text class="iv-title">面试中</text>
+        <view class="iv-progress">
+          <view class="iv-progress-bar">
+            <view class="iv-progress-fill" style="width:{{progress.current/progress.total*100}}%"></view>
+          </view>
+          <text class="iv-progress-text">{{progress.current}}/{{progress.total}}</text>
+        </view>
+      </view>
+      <button class="btn-end" bindtap="endInterview">结束</button>
+    </view>
+    <scroll-view class="iv-chat" scroll-y scroll-into-view="iv-msg-{{messages.length-1}}" scroll-with-animation>
+      <view wx:for="{{messages}}" wx:key="index" id="iv-msg-{{index}}" class="msg {{item.role}}">
+        <view class="msg-avatar">{{item.role==='user'?'U':'AI'}}</view>
+        <view class="msg-content">
+          <text wx:if="{{item.role==='assistant'}}" class="msg-label">面试官</text>
+          {{item.content}}
+        </view>
+      </view>
+      <view wx:if="{{typing}}" class="msg assistant">
+        <view class="msg-avatar">AI</view>
+        <view class="msg-content"><view class="typing-dots"><view></view><view></view><view></view></view></view>
+      </view>
+    </scroll-view>
+    <view class="iv-input-area">
+      <textarea class="iv-input" value="{{answerText}}" placeholder="输入你的回答..." bindinput="onAnswerInput" bindconfirm="submitAnswer" bindkeyboardheightchange="onKBChange" auto-height maxlength="2000" cursor-spacing="20" adjust-position="{{false}}"/>
+      <button class="btn-send" bindtap="submitAnswer" disabled="{{submitting||!answerText}}">➤</button>
+      <button class="btn-skip" bindtap="skipQ">跳过</button>
+    </view>
+  </view>
+
+  <!-- Phase: Report -->
+  <view wx:if="{{phase==='report'}}" class="phase-card">
+    <view wx:if="{{report}}" class="report-section">
+      <view class="card-title">面试评估报告</view>
+      <view class="score-center">
+        <view class="score-big {{report.score_100>=80?'high':report.score_100>=60?'mid':'low'}}">
+          {{report.score_100||(report.overall_score*10)}}<text class="score-unit">/100</text>
+        </view>
+        <text class="score-grade">{{report.grade||''}}级</text>
+      </view>
+
+      <view wx:if="{{report.summary}}" class="section">
+        <view class="section-title">综合评价</view>
+        <text class="section-text">{{report.summary}}</text>
+      </view>
+
+      <view wx:if="{{report.highlights&&report.highlights.length}}" class="section">
+        <view class="section-title">优势</view>
+        <view wx:for="{{report.highlights}}" wx:key="*this" class="bullet-item">{{item}}</view>
+      </view>
+
+      <view wx:if="{{report.weak_areas&&report.weak_areas.length}}" class="section">
+        <view class="section-title">待提升</view>
+        <view wx:for="{{report.weak_areas}}" wx:key="*this" class="bullet-item">{{item}}</view>
+      </view>
+
+      <view wx:if="{{report.question_reviews&&report.question_reviews.length}}" class="section">
+        <view class="section-title">逐题点评</view>
+        <view wx:for="{{report.question_reviews}}" wx:key="*this" class="review-item">{{item}}</view>
+      </view>
+
+      <!-- Review Plan -->
+      <view wx:if="{{plan}}" class="section" style="margin-top:30rpx">
+        <view class="section-title">复习计划</view>
+        <view wx:for="{{plan.plan_items}}" wx:key="topic" class="plan-item">
+          <view class="plan-header">
+            <text class="plan-priority {{item.priority}}">{{item.priority==='high'?'▲':item.priority==='medium'?'■':'●'}}</text>
+            <text class="plan-topic">{{item.topic}}</text>
+            <text class="plan-hours">{{item.estimated_hours}}h</text>
+          </view>
+          <text class="plan-desc">{{item.description}}</text>
+        </view>
+        <view wx:if="{{plan.resources&&plan.resources.length}}" class="section">
+          <view class="section-title">推荐资源</view>
+          <view wx:for="{{plan.resources}}" wx:key="url" class="resource-item">
+            <text class="res-title">{{item.title}}</text>
+            <text class="res-meta">{{item.type}}  {{item.source}}</text>
+            <text wx:if="{{item.description}}" class="res-desc">{{item.description}}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <view wx:else class="empty-state">
+      <text>正在加载报告...</text>
+    </view>
+
+    <button class="btn-primary" bindtap="newInterview" style="margin-top:30rpx">开始新面试</button>
+  </view>
+</view>

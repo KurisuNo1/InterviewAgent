@@ -1,0 +1,58 @@
+<view class="container" style="padding-bottom: {{kbHeight}}px;">
+  <!-- Skill List -->
+  <view wx:if="{{!activeSkill}}">
+    <view class="hero">
+      <view class="hero-icon">
+        <text class="hero-icon-text">靶</text>
+      </view>
+      <text class="hero-title">技能练习中心</text>
+      <text class="hero-desc">选择一项技能开始多轮交互练习</text>
+    </view>
+
+    <view wx:if="{{coreSkills.length}}" class="skill-section">
+      <text class="section-label">面试技能</text>
+      <view wx:for="{{coreSkills}}" wx:key="name" class="skill-card" data-name="{{item.name}}" bindtap="startSkill">
+        <view class="skill-icon-wrap core">
+          <text>{{item.icon}}</text>
+        </view>
+        <view class="skill-body">
+          <text class="skill-name">{{item.displayName}}</text>
+          <text class="skill-desc">{{item.displayDesc}}</text>
+        </view>
+        <text class="skill-arrow">›</text>
+      </view>
+    </view>
+
+    <view wx:if="{{trainingSkills.length}}" class="skill-section">
+      <text class="section-label">专项训练</text>
+      <view wx:for="{{trainingSkills}}" wx:key="name" class="skill-card" data-name="{{item.name}}" bindtap="startSkill">
+        <view class="skill-icon-wrap training">
+          <text>{{item.icon}}</text>
+        </view>
+        <view class="skill-body">
+          <text class="skill-name">{{item.displayName}}</text>
+          <text class="skill-desc">{{item.displayDesc}}</text>
+        </view>
+        <text class="skill-arrow">›</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- Active Skill Chat -->
+  <view wx:if="{{activeSkill}}" class="skill-chat-container">
+    <view class="skill-header">
+      <button class="btn-back" bindtap="backToList">返回</button>
+      <text class="skill-title">{{activeSkill}}</text>
+    </view>
+    <scroll-view class="skill-chat" scroll-y scroll-into-view="sk-msg-{{skillMessages.length-1}}" scroll-with-animation>
+      <view wx:for="{{skillMessages}}" wx:key="index" id="sk-msg-{{index}}" class="msg {{item.role}}">
+        <view class="msg-avatar">{{item.role==='user'?'U':'AI'}}</view>
+        <view class="msg-content">{{item.content}}</view>
+      </view>
+    </scroll-view>
+    <view class="skill-input-area">
+      <textarea class="skill-input" value="{{skillInput}}" placeholder="输入你的回答..." bindinput="onSkillInput" bindconfirm="submitSkillAnswer" bindkeyboardheightchange="onKBChange" auto-height maxlength="2000" cursor-spacing="20" adjust-position="{{false}}"/>
+      <button class="btn-send" bindtap="submitSkillAnswer" disabled="{{skillSending||!skillInput}}">➤</button>
+    </view>
+  </view>
+</view>

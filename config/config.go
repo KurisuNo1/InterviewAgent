@@ -22,8 +22,11 @@ type Config struct {
 	Interview InterviewConfig `mapstructure:"interview"`
 	RAG       RAGConfig       `mapstructure:"rag"`
 	Memory    MemoryConfig    `mapstructure:"memory"`
+	Context   ContextConfig   `mapstructure:"context"`
 	Skills    []SkillConfig   `mapstructure:"skills"`
 	Logging   LoggingConfig   `mapstructure:"logging"`
+	Upload    UploadConfig    `mapstructure:"upload"`
+	WeChat    WeChatConfig    `mapstructure:"wechat"`
 }
 
 // ServerConfig holds HTTP/WebSocket server settings.
@@ -33,6 +36,8 @@ type ServerConfig struct {
 	WSPath       string        `mapstructure:"ws_path"`
 	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
 	WriteTimeout time.Duration `mapstructure:"write_timeout"`
+	JWTSecret    string        `mapstructure:"jwt_secret"`
+	JWTExpiry    time.Duration `mapstructure:"jwt_expiry"`
 }
 
 // LLMConfig holds LLM provider settings.
@@ -161,6 +166,22 @@ type LongTermMemConfig struct {
 	MaxHistory int `mapstructure:"max_history"`
 }
 
+// ContextConfig holds LLM context window management settings.
+type ContextConfig struct {
+	MaxTokens    int                       `mapstructure:"max_tokens"`
+	Profiles     map[string]ContextProfile `mapstructure:"profiles"`
+}
+
+// ContextProfile defines token allocation for a specific LLM call path.
+type ContextProfile struct {
+	SystemMax           int `mapstructure:"system_max"`
+	WorkingMemory       int `mapstructure:"working_memory"`
+	RAGMax              int `mapstructure:"rag_max"`
+	RecentVerbatimTurns int `mapstructure:"recent_verbatim_turns"`
+	HistoryMaxTurns     int `mapstructure:"history_max_turns"`
+	CompressionThreshold int `mapstructure:"compression_threshold_turns"`
+}
+
 // SkillConfig defines a single skill module.
 type SkillConfig struct {
 	Name      string `mapstructure:"name"`
@@ -174,6 +195,19 @@ type LoggingConfig struct {
 	Format   string `mapstructure:"format"`
 	Output   string `mapstructure:"output"`
 	FilePath string `mapstructure:"file_path"`
+}
+
+// UploadConfig holds document upload settings.
+type UploadConfig struct {
+	MaxFileSize  int64 `mapstructure:"max_file_size"`
+	ChunkSize    int   `mapstructure:"chunk_size"`
+	ChunkOverlap int   `mapstructure:"chunk_overlap"`
+}
+
+// WeChatConfig holds WeChat Mini-Program login settings.
+type WeChatConfig struct {
+	AppID     string `mapstructure:"app_id"`
+	AppSecret string `mapstructure:"app_secret"`
 }
 
 // LoadEnv reads a .env file (if present) and sets environment variables.
@@ -194,6 +228,13 @@ func LoadEnv(path string) {
 		}
 		key := strings.TrimSpace(parts[0])
 		val := strings.TrimSpace(parts[1])
+		// Strip inline comment (e.g. "value  # comment" -> "value")
+		if idx := strings.Index(val, " #"); idx >= 0 {
+			val = strings.TrimSpace(val[:idx])
+		}
+		if val == "" {
+			continue
+		}
 		if os.Getenv(key) == "" {
 			os.Setenv(key, val)
 		}
@@ -217,11 +258,40 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	// Expand ${ENV_VAR} placeholders in string config values
+	cfg.expandEnvVars()
+
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 
 	return &cfg, nil
+}
+
+// expandEnvVars replaces ${VAR} and ${VAR:-default} patterns with environment variable values.
+func (c *Config) expandEnvVars() {
+	c.WeChat.AppID = expandEnv(c.WeChat.AppID)
+	c.WeChat.AppSecret = expandEnv(c.WeChat.AppSecret)
+	c.Server.JWTSecret = expandEnv(c.Server.JWTSecret)
+}
+
+// expandEnv replaces ${VAR} and ${VAR:-default} patterns in s with env var values.
+func expandEnv(s string) string {
+	if !strings.Contains(s, "${") {
+		return s
+	}
+	return os.Expand(s, func(key string) string {
+		// Handle ${VAR:-default} syntax
+		if idx := strings.Index(key, ":-"); idx >= 0 {
+			varName := key[:idx]
+			defaultVal := key[idx+2:]
+			if val := os.Getenv(varName); val != "" {
+				return val
+			}
+			return defaultVal
+		}
+		return os.Getenv(key)
+	})
 }
 
 // Validate checks that required fields are set.

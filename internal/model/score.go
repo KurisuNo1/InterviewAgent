@@ -11,9 +11,13 @@ type ScoreDimension struct {
 
 // Evaluation represents the scoring result for a single question.
 type Evaluation struct {
-	QuestionID string           `json:"question_id"`
-	Dimensions []ScoreDimension `json:"dimensions"`
-	TotalScore float64          `json:"total_score"`
-	Feedback   string           `json:"feedback"`
-	IsCorrect  bool             `json:"is_correct"`
+	QuestionID   string           `json:"question_id"`
+	Dimensions   []ScoreDimension `json:"dimensions"`
+	TotalScore   float64          `json:"total_score"`
+	Feedback     string           `json:"feedback"`
+	IsCorrect    bool             `json:"is_correct"`
+	Praise       string           `json:"praise,omitempty"`     // specific strengths in this answer
+	Issues       string           `json:"issues,omitempty"`     // specific problems or gaps
+	Improvement  string           `json:"improvement,omitempty"` // actionable advice to improve
+	KeyTakeaway  string           `json:"key_takeaway,omitempty"` // single most important learning point
 }

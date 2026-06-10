@@ -7,6 +7,7 @@ type InterviewPhase string
 
 const (
 	PhaseCreated          InterviewPhase = "created"
+	PhaseActive           InterviewPhase = "active"
 	PhaseJDParsing        InterviewPhase = "jd_parsing"
 	PhaseResumeMatching   InterviewPhase = "resume_matching"
 	PhaseQuestionPlanning InterviewPhase = "question_planning"

@@ -92,6 +92,7 @@ services:
       MINIO_SECRET_ACCESS_KEY: minioadmin
     volumes:
       - milvus-data:/var/lib/milvus
+      - ./docker/milvus/milvus.yaml:/milvus/configs/milvus.yaml:ro
     ports:
       - "19530:19530"
       - "9091:9091"
@@ -122,6 +123,8 @@ services:
       - MYSQL_PASSWORD=${MYSQL_ROOT_PASSWORD:-interview123}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - BRAVE_API_KEY=${BRAVE_API_KEY:-}
+      - WECHAT_APPID=${WECHAT_APPID:-}
+      - WECHAT_APPSECRET=${WECHAT_APPSECRET:-}
     depends_on:
       redis:
         condition: service_healthy

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cloudwego/eino/components/retriever"
+	"github.com/cloudwego/eino/schema"
 	"github.com/milvus-io/milvus-sdk-go/v2/client"
 	"github.com/milvus-io/milvus-sdk-go/v2/entity"
 )
@@ -56,7 +58,22 @@ func (m *MilvusStore) ensureCollection(ctx context.Context) error {
 		return err
 	}
 	if has {
-		return nil
+		// Verify schema compatibility: if the ID field is still the old Int64 type, drop and recreate
+		desc, err := m.client.DescribeCollection(ctx, m.cfg.Collection)
+		if err != nil {
+			return fmt.Errorf("failed to describe collection: %w", err)
+		}
+		for _, f := range desc.Schema.Fields {
+			if f.Name == "id" && f.DataType != entity.FieldTypeVarChar {
+				if err := m.client.DropCollection(ctx, m.cfg.Collection); err != nil {
+					return fmt.Errorf("collection schema changed (id: Int64→VarChar), failed to drop old: %w", err)
+				}
+				break
+			}
+		}
+		if has, _ := m.client.HasCollection(ctx, m.cfg.Collection); has {
+			return nil // compatible schema
+		}
 	}
 
 	dimStr := fmt.Sprintf("%d", m.cfg.Dimension)
@@ -65,9 +82,14 @@ func (m *MilvusStore) ensureCollection(ctx context.Context) error {
 		Fields: []*entity.Field{
 			entity.NewField().
 				WithName("id").
-				WithDataType(entity.FieldTypeInt64).
+				WithDataType(entity.FieldTypeVarChar).
+				WithTypeParams("max_length", "128").
 				WithIsPrimaryKey(true).
-				WithIsAutoID(true),
+				WithIsAutoID(false),
+			entity.NewField().
+				WithName("source_file").
+				WithDataType(entity.FieldTypeVarChar).
+				WithTypeParams("max_length", "512"),
 			entity.NewField().
 				WithName("content").
 				WithDataType(entity.FieldTypeVarChar).
@@ -106,7 +128,7 @@ func (m *MilvusStore) ensureCollection(ctx context.Context) error {
 }
 
 // Search performs ANN search in Milvus.
-func (m *MilvusStore) Search(ctx context.Context, queryVector []float32, topK int, filter map[string]string) ([]*Document, error) {
+func (m *MilvusStore) Search(ctx context.Context, queryVector []float32, topK int, filter map[string]string) ([]*schema.Document, error) {
 	if err := m.client.LoadCollection(ctx, m.cfg.Collection, false); err != nil {
 		return nil, fmt.Errorf("failed to load collection: %w", err)
 	}
@@ -143,18 +165,19 @@ func (m *MilvusStore) Search(ctx context.Context, queryVector []float32, topK in
 		return nil, nil
 	}
 
-	docs := make([]*Document, 0)
+	docs := make([]*schema.Document, 0)
 	for _, result := range results {
 		if result.Err != nil {
 			continue
 		}
-		// Extract IDs
 		idCol := result.IDs
-		// Extract content
 		contentCol := result.Fields.GetColumn("content")
 
 		for i := 0; i < result.ResultCount; i++ {
-			id, _ := idCol.GetAsInt64(i)
+			id := ""
+			if cv, ok := idCol.(*entity.ColumnVarChar); ok {
+				id, _ = cv.ValueByIdx(i)
+			}
 			content := ""
 			if contentCol != nil {
 				if cv, ok := contentCol.(*entity.ColumnVarChar); ok {
@@ -165,36 +188,47 @@ func (m *MilvusStore) Search(ctx context.Context, queryVector []float32, topK in
 			if i < len(result.Scores) {
 				score = result.Scores[i]
 			}
-			docs = append(docs, &Document{
-				ID:      fmt.Sprintf("%d", id),
+			doc := &schema.Document{
+				ID:      id,
 				Content: content,
-				Metadata: map[string]string{
-					"score": fmt.Sprintf("%.4f", score),
-				},
-			})
+			}
+			doc.WithScore(float64(score))
+			docs = append(docs, doc)
 		}
 	}
 
 	return docs, nil
 }
 
-// Insert indexes documents into Milvus.
-func (m *MilvusStore) Insert(ctx context.Context, docs []*Document) error {
+// Insert indexes documents into Milvus. Each doc must have a dense vector set.
+func (m *MilvusStore) Insert(ctx context.Context, docs []*schema.Document) error {
 	if len(docs) == 0 {
 		return nil
 	}
 
+	ids := make([]string, len(docs))
 	contents := make([]string, len(docs))
+	sourceFiles := make([]string, len(docs))
 	vectors := make([][]float32, len(docs))
 	for i, doc := range docs {
+		ids[i] = doc.ID
 		contents[i] = doc.Content
-		vectors[i] = doc.Vector
+		if vec := doc.DenseVector(); vec != nil {
+			vectors[i] = toFloat32Slice(vec)
+		}
+		if sf, ok := doc.MetaData["source_file"]; ok {
+			if sfs, ok := sf.(string); ok {
+				sourceFiles[i] = sfs
+			}
+		}
 	}
 
+	colID := entity.NewColumnVarChar("id", ids)
+	colSourceFile := entity.NewColumnVarChar("source_file", sourceFiles)
 	colContent := entity.NewColumnVarChar("content", contents)
 	colEmbedding := entity.NewColumnFloatVector("embedding", m.cfg.Dimension, vectors)
 
-	_, err := m.client.Insert(ctx, m.cfg.Collection, "", colContent, colEmbedding)
+	_, err := m.client.Insert(ctx, m.cfg.Collection, "", colID, colSourceFile, colContent, colEmbedding)
 	if err != nil {
 		return fmt.Errorf("insert failed: %w", err)
 	}
@@ -212,11 +246,59 @@ func (m *MilvusStore) Delete(ctx context.Context, ids []string) error {
 		if i > 0 {
 			expr += ", "
 		}
-		expr += id
+		expr += fmt.Sprintf(`"%s"`, id)
 	}
 	expr += "]"
 	return m.client.Delete(ctx, m.cfg.Collection, "", expr)
 }
+
+// Retrieve implements retriever.Retriever for Eino integration.
+// It converts the float64 embedding (Eino standard) to float32 (Milvus SDK).
+func (m *MilvusStore) Retrieve(ctx context.Context, query string, opts ...retriever.Option) ([]*schema.Document, error) {
+	options := retriever.GetCommonOptions(&retriever.Options{TopK: intPtr(10)}, opts...)
+	topK := 10
+	if options.TopK != nil {
+		topK = *options.TopK
+	}
+
+	var queryVec []float32
+	if options.Embedding != nil {
+		vecs, err := options.Embedding.EmbedStrings(ctx, []string{query})
+		if err != nil {
+			return nil, fmt.Errorf("embed query failed: %w", err)
+		}
+		if len(vecs) > 0 {
+			queryVec = toFloat32Slice(vecs[0])
+		}
+	}
+	if len(queryVec) == 0 {
+		return nil, fmt.Errorf("vector search requires embedding option")
+	}
+
+	docs, err := m.Search(ctx, queryVec, topK, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, d := range docs {
+		if d.MetaData == nil {
+			d.MetaData = make(map[string]any)
+		}
+		d.MetaData["source"] = "vector"
+	}
+	return docs, nil
+}
+
+// toFloat32Slice converts float64 slice to float32 for Milvus SDK.
+func toFloat32Slice(v []float64) []float32 {
+	r := make([]float32, len(v))
+	for i, val := range v {
+		r[i] = float32(val)
+	}
+	return r
+}
+
+func intPtr(n int) *int { return &n }
 
 // Close releases the Milvus connection.
 func (m *MilvusStore) Close() error {

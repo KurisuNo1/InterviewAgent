@@ -216,10 +216,6 @@ func questionPlanningLambda(qp *nodes.QuestionPlanningNode) func(ctx context.Con
 		if state.QuestionPlan != nil && len(state.QuestionQueue) > 0 {
 			return state, nil
 		}
-		// Skip if resume matching hasn't been done yet
-		if state.ResumeMatch == nil {
-			return state, nil
-		}
 		return state, qp.Execute(ctx, state)
 	}
 }

@@ -3,6 +3,8 @@ server:
   port: 8080
   ws_path: "/ws"
   read_timeout: 30s
+  jwt_secret: "${JWT_SECRET:-interview-agent-secret-key}"
+  jwt_expiry: 24h
   write_timeout: 60s
 
 llm:
@@ -17,9 +19,9 @@ llm:
 
 embedding:
   provider: "qwen"
-  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  base_url: "https://api-inference.modelscope.cn/v1" 
   api_key_env: "DASHSCOPE_API_KEY"
-  model: "text-embedding-v3"
+  model: "Qwen/Qwen3-Embedding-0.6B" 
   dimensions: 1024
   timeout: 30s
 
@@ -27,8 +29,8 @@ vector_db:
   type: "milvus"
   host: "localhost"
   port: 19530
-  username: ""
-  password: ""
+  username: "root"
+  password: "Milvus"
   database: "default"
   collection: "interview_question_bank"
   dimension: 1024
@@ -49,9 +51,7 @@ mcp:
         GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_TOKEN}"
     - name: "web_search"
       command: "npx"
-      args: ["-y", "@anthropic/mcp-server-brave-search"]
-      env:
-        BRAVE_API_KEY: "${BRAVE_API_KEY}"
+      args: ["-y", "freesearch-mcpserver"]
 
 redis:
   host: "localhost"
@@ -113,6 +113,52 @@ memory:
   long_term:
     max_history: 50
 
+context:
+  max_tokens: 32768
+  profiles:
+    casual_chat:
+      system_max: 1024
+      working_memory: 24576
+      rag_max: 4096
+      recent_verbatim_turns: 3
+      history_max_turns: 20
+      compression_threshold_turns: 12
+    interview_ask:
+      system_max: 2048
+      working_memory: 16384
+      rag_max: 4096
+      recent_verbatim_turns: 3
+      history_max_turns: 8
+      compression_threshold_turns: 8
+    interview_eval:
+      system_max: 3072
+      working_memory: 8192
+      rag_max: 4096
+      recent_verbatim_turns: 3
+      history_max_turns: 6
+      compression_threshold_turns: 6
+    skill:
+      system_max: 2048
+      working_memory: 20480
+      rag_max: 4096
+      recent_verbatim_turns: 3
+      history_max_turns: 12
+      compression_threshold_turns: 10
+    stream_fallback:
+      system_max: 1024
+      working_memory: 24576
+      rag_max: 4096
+      recent_verbatim_turns: 3
+      history_max_turns: 20
+      compression_threshold_turns: 12
+    stream_agent:
+      system_max: 1024
+      working_memory: 24576
+      rag_max: 4096
+      recent_verbatim_turns: 3
+      history_max_turns: 20
+      compression_threshold_turns: 12
+
 skills:
   - name: "algorithm"
     sub_intent: "algorithm"
@@ -132,4 +178,13 @@ logging:
   format: "json"
   output: "stdout"
   file_path: "./logs/interview_agent.log"
+
+upload:
+  max_file_size: 10485760  # 10 MB
+  chunk_size: 1000
+  chunk_overlap: 200
+
+wechat:
+  app_id: "${WECHAT_APPID}"
+  app_secret: "${WECHAT_APPSECRET}"
 

@@ -227,8 +227,10 @@ InterviewAgent/
 │   │   │   ├── skill.go, registry.go
 │   │   │   ├── algorithm.go, system_design.go
 │   │   │   ├── behavioral.go, tech_quiz.go
-│   │   └── memory/                    # Memory记忆系统
-│   │       ├── manager.go, short_term.go, long_term.go
+│   │   ├── memory/                    # Memory记忆系统
+│   │   │   ├── manager.go, short_term.go, long_term.go
+│   │   └── contextmanager/             # 上下文管理
+│   │       ├── budget.go, builder.go, compressor.go, hierarchy.go
 │   ├── capability/                    # L3: 基础能力层
 │   │   ├── llm/                       # LLM (DeepSeek)
 │   │   │   ├── chat_model.go, deepseek.go
@@ -518,6 +520,127 @@ wscat -c "ws://localhost:8080/ws?session_id=test-session"
 | `short_term.max_messages` | int | `30` | 对话窗口大小 |
 | `short_term.ttl` | duration | `7200s` | 短期记忆过期时间 |
 | `long_term.max_history` | int | `50` | 长期历史记录上限 |
+
+### 上下文管理 `context`
+
+LLM 上下文窗口管理，实现窗口分配、记忆分层、压缩策略和上下文编排四层机制。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `max_tokens` | int | `32768` | 总 token 预算 |
+| `profiles.<name>.system_max` | int | — | 该路径的系统提示词最大 tokens |
+| `profiles.<name>.working_memory` | int | — | 工作记忆区 budget |
+| `profiles.<name>.rag_max` | int | — | RAG 文档最大 tokens |
+| `profiles.<name>.recent_verbatim_turns` | int | `3` | 保留原文的最近对话轮数 |
+| `profiles.<name>.history_max_turns` | int | — | 最多保留多少轮历史 |
+| `profiles.<name>.compression_threshold_turns` | int | — | 超过该轮数触发压缩 |
+
+支持的 profile: `casual_chat`, `interview_ask`, `interview_eval`, `skill`, `stream_fallback`, `stream_agent`
+
+#### 架构设计
+
+```
+┌──────────────────────────────────────────────────────┐
+│                   ContextBuilder                      │
+│  (所有 LLM 调用的统一入口)                             │
+│                                                      │
+│  ┌──────────┐  ┌──────────┐  ┌───────────────────┐  │
+│  │ 窗口分配  │  │ 记忆分层  │  │     压缩策略       │  │
+│  │ (Budget) │  │(Hierarchy)│  │  (Compressor)     │  │
+│  └──────────┘  └──────────┘  └───────────────────┘  │
+│                                                      │
+│  ┌──────────────────────────────────────────────┐    │
+│  │              上下文编排 (Orchestration)       │    │
+│  │  每个 graph step 独立的 context profile       │    │
+│  │  优先级打包: system > state > recent > RAG > old │  │
+│  └──────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────┘
+```
+
+#### 窗口分配
+
+总预算 32K tokens，按调用路径差异化分配:
+
+| 调用路径 | System | 工作记忆 | RAG | 预留 |
+|----------|:------:|:------:|:---:|:----:|
+| 闲聊 (chat) | 1K | 24K | 4K | 3K |
+| 面试-提问 | 2K | 16K | 4K | 10K |
+| 面试-评估 | 3K | 8K | 4K | 17K |
+| 技能练习 | 2K | 20K | 4K | 6K |
+
+优先级打包规则（budget 不足时从低到高丢弃）:
+1. System Prompt + Current User Input (绝不丢弃)
+2. 当前题目上下文 (Question, ScoringPoints)
+3. 最近 3 轮对话 (verbatim)
+4. RAG 参考文档
+5. 更早的对话历史 (compress 或 drop)
+
+#### 记忆分层
+
+三层模型:
+
+```
+Layer 0: Working Memory (LLM 上下文内)
+  ├── 当前轮: 问题 + 回答 (verbatim)
+  ├── 近期历史: 最近 3 轮 verbatim + 4-8 轮摘要
+  ├── 活跃状态: position, level, techStack
+  └── RAG 片段: 与当前问题相关的参考文档
+  容量: 16K tokens | 生命周期: 每次 LLM 调用时重新组装
+
+Layer 1: Short-Term (Redis)
+  ├── 完整近期消息 (最多 30 轮 = 60 条)
+  ├── 原始文本, 未压缩
+  └── TTL: 24h | 操作: LPush + LTrim to 60
+
+Layer 2: Long-Term (MySQL)
+  ├── 全部消息 (完整归档)
+  ├── Session 摘要 (面试结束后 LLM 生成)
+  ├── 历史面试报告 (Report + ReviewPlan)
+  └── 用户画像: 薄弱领域、进步曲线
+```
+
+转换规则:
+- 短期→工作: 每次 LLM 调用前，ContextBuilder 从 Redis 拉取并按 budget 压缩后打包
+- 长期→工作: 新 session 创建时加载用户最近 3 次面试的 weak_areas
+- 压缩触发: 工作记忆超过 budget → 旧轮次从 verbatim 降级为摘要
+
+#### 压缩策略
+
+三种策略按场景选择:
+
+| 策略 | 适用场景 | 方法 |
+|------|---------|------|
+| A: 滑动窗口+渐进摘要 | 面试提问 | 最近3轮原文 + 4-7轮提取关键信息 + 更早合并为摘要 |
+| B: 结构化提取 | 面试评估 | Q&A转结构化字段(qs/akp/sc/wd)，3x压缩率 |
+| C: LLM 摘要 | 长对话/Session结束 | 异步调LLM将旧轮次总结为200字 |
+
+压缩率: 20轮对话 ~8000 tokens → 压缩后 ~5800 tokens (约30%压缩)
+
+#### 上下文编排
+
+每个 Graph Step 独立的 Context Profile:
+
+| Graph Step | System | History | RAG | State Context |
+|------------|--------|---------|-----|---------------|
+| JD Analysis | JD prompt | 无 | 无 | JD text |
+| Resume Match | Match prompt | 无 | 无 | JD + Resume |
+| Question Plan | Plan prompt | 无 | 3 docs | JD + Resume |
+| Interview (提问) | Interview prompt | 压缩8轮 | 3 docs | position/level/stack |
+| Interview (评估) | Eval prompt | 最后3轮 | 搜索参考 | Q + answer |
+| Review Plan | Review prompt | 无 | 无 | Evaluations |
+| Casual Chat | Chat prompt | 压缩历史 | 3 docs | 无 |
+
+所有 LLM 调用统一通过 `ContextBuilder.Build()` 组装 prompt，在内部完成 token 计数、压缩和打包。
+
+#### 文件结构
+
+```
+internal/orchestration/contextmanager/
+├── budget.go       # TokenBudget + EstimateTokens + Profile
+├── builder.go      # ContextBuilder (统一 prompt 构建入口)
+├── compressor.go   # ConversationCompressor (3种压缩策略)
+└── hierarchy.go    # MemoryHierarchy (三层记忆协调)
+```
 
 ### 技能模块 `skills`
 

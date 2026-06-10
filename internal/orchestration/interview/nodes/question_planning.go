@@ -6,49 +6,55 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/KurisuNo1/InterviewAgent/internal/capability/llm"
+	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/components/embedding"
+	"github.com/cloudwego/eino/components/retriever"
+	"github.com/cloudwego/eino/schema"
 	"github.com/KurisuNo1/InterviewAgent/internal/model"
 	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/difficulty"
-	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/rag"
 
 	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/interview/nodes/prompts"
 )
 
-// Embedder is a simplified embedding interface for the question planning node.
-type Embedder interface {
-	EmbedSingle(ctx context.Context, text string) ([]float32, error)
-}
-
 // QuestionPlanningNode plans the interview questions based on JD, resume match, and RAG.
 type QuestionPlanningNode struct {
-	chatModel      llm.ChatModel
-	hybridSearcher *rag.HybridSearcher
-	embedder       Embedder
+	chatModel       einomodel.ToolCallingChatModel
+	hybridRetriever retriever.Retriever
+	embedder        embedding.Embedder
 }
 
 // NewQuestionPlanningNode creates a new question planning node.
-func NewQuestionPlanningNode(chatModel llm.ChatModel, hs *rag.HybridSearcher, emb Embedder) *QuestionPlanningNode {
+func NewQuestionPlanningNode(chatModel einomodel.ToolCallingChatModel, hybridRetriever retriever.Retriever, emb embedding.Embedder) *QuestionPlanningNode {
 	return &QuestionPlanningNode{
-		chatModel:      chatModel,
-		hybridSearcher: hs,
-		embedder:       emb,
+		chatModel:       chatModel,
+		hybridRetriever: hybridRetriever,
+		embedder:        emb,
 	}
 }
 
 // Execute plans questions and populates the state.
 func (n *QuestionPlanningNode) Execute(ctx context.Context, state *InterviewState) error {
-	if state.JDAnalysis == nil || state.ResumeMatch == nil {
-		return fmt.Errorf("JD analysis and resume matching must be completed before question planning")
+	if state.JDAnalysis == nil {
+		return fmt.Errorf("JD analysis must be completed before question planning")
 	}
 
-	// Build search query from JD and gaps
-	query := buildSearchQuery(state.JDAnalysis, state.ResumeMatch)
+	strengths := []string{}
+	gaps := []string{}
+	if state.ResumeMatch != nil {
+		strengths = state.ResumeMatch.Strengths
+		gaps = state.ResumeMatch.Gaps
+	}
 
-	// Retrieve relevant questions using hybrid search (vector + keyword → RRF → LLM rerank)
+	query := buildSearchQueryFromJD(state.JDAnalysis)
+	if state.ResumeMatch != nil {
+		query = buildSearchQuery(state.JDAnalysis, state.ResumeMatch)
+	}
+
 	docs, err := n.retrieveQuestions(ctx, query, 10, 5)
 	if err != nil {
-		// If retrieval fails, fall back to LLM-only generation
 		docs = ""
+	} else {
+		state.RAGDocuments = docs
 	}
 
 	diffDist := "easy: 30%%, medium: 50%%, hard: 20%%"
@@ -60,12 +66,12 @@ func (n *QuestionPlanningNode) Execute(ctx context.Context, state *InterviewStat
 	}
 
 	jdJSON, _ := json.Marshal(state.JDAnalysis)
-	prompt := fmt.Sprintf(prompts.QuestionPlanSystemPrompt,
-		string(jdJSON), state.ResumeMatch.Strengths, state.ResumeMatch.Gaps, diffDist, docs)
+	prompt := safeFmt(prompts.QuestionPlanSystemPrompt,
+		string(jdJSON), strengths, gaps, diffDist, docs)
 
-	resp, err := n.chatModel.Chat(ctx, []llm.Message{
-		{Role: "system", Content: prompt},
-		{Role: "user", Content: "Please create a question plan for this candidate interview."},
+	resp, err := n.chatModel.Generate(ctx, []*schema.Message{
+		schema.SystemMessage(prompt),
+		schema.UserMessage("Please create a question plan for this candidate interview."),
 	})
 	if err != nil {
 		return fmt.Errorf("question planning failed: %w", err)
@@ -83,21 +89,12 @@ func (n *QuestionPlanningNode) Execute(ctx context.Context, state *InterviewStat
 	return nil
 }
 
-// retrieveQuestions fetches relevant questions using RRF fusion + LLM rerank hybrid search.
 func (n *QuestionPlanningNode) retrieveQuestions(ctx context.Context, query string, topK, finalK int) (string, error) {
-	if n.hybridSearcher == nil {
-		return "", fmt.Errorf("hybrid searcher not available")
+	if n.hybridRetriever == nil {
+		return "", fmt.Errorf("hybrid retriever not available")
 	}
 
-	var embedding []float32
-	if n.embedder != nil {
-		vec, err := n.embedder.EmbedSingle(ctx, query)
-		if err == nil {
-			embedding = vec
-		}
-	}
-
-	docs, err := n.hybridSearcher.Search(ctx, query, embedding, topK, finalK)
+	docs, err := n.hybridRetriever.Retrieve(ctx, query, retriever.WithTopK(finalK))
 	if err != nil {
 		return "", err
 	}
@@ -117,5 +114,10 @@ func (n *QuestionPlanningNode) retrieveQuestions(ctx context.Context, query stri
 func buildSearchQuery(jd *model.JDAnalysis, match *model.ResumeMatch) string {
 	parts := append(jd.TechStack, jd.CoreSkills...)
 	parts = append(parts, match.Gaps...)
+	return strings.Join(parts, " ")
+}
+
+func buildSearchQueryFromJD(jd *model.JDAnalysis) string {
+	parts := append(jd.TechStack, jd.CoreSkills...)
 	return strings.Join(parts, " ")
 }

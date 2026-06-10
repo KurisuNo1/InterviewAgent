@@ -2,13 +2,17 @@ package model
 
 // Report represents the final interview evaluation report.
 type Report struct {
-	SessionID      string             `json:"session_id"`
-	OverallScore   float64            `json:"overall_score"`
-	DimensionScore map[string]float64 `json:"dimension_score"`
-	Evaluations    []Evaluation       `json:"evaluations"`
-	Highlights     []string           `json:"highlights"`
-	WeakAreas      []string           `json:"weak_areas"`
-	Summary        string             `json:"summary"`
+	SessionID       string             `json:"session_id"`
+	OverallScore    float64            `json:"overall_score"`
+	Score100        float64            `json:"score_100"`
+	Grade           string             `json:"grade"`
+	DimensionScore  map[string]float64 `json:"dimension_score"`
+	Evaluations     []Evaluation       `json:"evaluations"`
+	Highlights      []string           `json:"highlights"`
+	WeakAreas       []string           `json:"weak_areas"`
+	Summary         string             `json:"summary"`
+	QuestionReviews []string           `json:"question_reviews,omitempty"` // per-question detailed reviews
+	OverallAdvice   string             `json:"overall_advice,omitempty"`   // dimension commentary
 }
 
 // ReviewPlan represents a personalized study plan.

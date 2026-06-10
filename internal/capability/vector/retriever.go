@@ -1,22 +1,19 @@
 package vector
 
-import "context"
+import (
+	"context"
 
-// Document represents a document in a vector store.
-type Document struct {
-	ID       string
-	Content  string
-	Vector   []float32
-	Metadata map[string]string
-}
+	"github.com/cloudwego/eino/schema"
+)
 
 // VectorRetriever performs semantic search over vector embeddings.
 type VectorRetriever interface {
-	Search(ctx context.Context, queryVector []float32, topK int, filter map[string]string) ([]*Document, error)
+	Search(ctx context.Context, queryVector []float32, topK int, filter map[string]string) ([]*schema.Document, error)
 }
 
 // VectorIndexer indexes documents with their vector embeddings.
+// Documents must have their dense vectors set via doc.WithDenseVector().
 type VectorIndexer interface {
-	Insert(ctx context.Context, docs []*Document) error
+	Insert(ctx context.Context, docs []*schema.Document) error
 	Delete(ctx context.Context, ids []string) error
 }

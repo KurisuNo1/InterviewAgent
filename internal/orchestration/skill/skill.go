@@ -15,9 +15,10 @@ type SkillState struct {
 
 // SkillResponse is the response from a skill handler.
 type SkillResponse struct {
-	Message    string `json:"message"`
-	IsComplete bool   `json:"is_complete"`
-	NextPrompt string `json:"next_prompt,omitempty"`
+	Message      string `json:"message"`
+	IsComplete   bool   `json:"is_complete"`
+	NextPrompt   string `json:"next_prompt,omitempty"`
+	CaptureInput bool   `json:"capture_input,omitempty"` // when true, input is raw topic extraction
 }
 
 // Skill defines the interface for a pluggable practice module.
@@ -26,6 +27,10 @@ type Skill interface {
 	Name() string
 	// Description describes what this skill does.
 	Description() string
+	// Category returns the skill category: "core" for interview agent skills, "training" for specialized training.
+	Category() string
+	// WelcomeMessage returns the initial prompt shown when starting this skill.
+	WelcomeMessage() string
 	// CanHandle checks if this skill can handle the given sub-intent.
 	CanHandle(subIntent string) bool
 	// Handle processes one round of the skill interaction.

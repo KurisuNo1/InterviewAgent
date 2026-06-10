@@ -5,16 +5,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/cloudwego/eino/components/embedding"
+	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/components/retriever"
+	"github.com/KurisuNo1/InterviewAgent/internal/capability/mcp"
 	"github.com/KurisuNo1/InterviewAgent/internal/capability/resume"
+
+	"github.com/cloudwego/eino/flow/agent/react"
+	"github.com/cloudwego/eino/schema"
 	"github.com/KurisuNo1/InterviewAgent/internal/interaction"
 	"github.com/KurisuNo1/InterviewAgent/internal/model"
+	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/contextmanager"
+	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/ingestion"
 	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/interview"
 	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/interview/nodes"
 	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/memory"
+	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/rag"
 	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/router"
 	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/skill"
 )
@@ -26,6 +37,16 @@ type Orchestrator struct {
 	interviewRunner *interview.Runner
 	skillRegistry   *skill.Registry
 	memory          *memory.Manager
+	docIngestor     *ingestion.DocumentIngestor
+	chatModel       einomodel.ToolCallingChatModel
+	hybridRetriever  retriever.Retriever
+	embedder        embedding.Embedder
+	githubMCP       *mcp.GitHubMCP
+	webMCP          *mcp.WebSearchMCP
+	casualAgent     *react.Agent // nil when MCP unavailable
+	mcpBridge       *mcp.EinoBridge
+	ctxBuilder      *contextmanager.ContextBuilder
+	memHierarchy    *contextmanager.MemoryHierarchy
 
 	mu     sync.RWMutex
 	states map[string]*nodes.InterviewState
@@ -83,12 +104,32 @@ func NewOrchestrator(
 	interviewRunner *interview.Runner,
 	skillRegistry *skill.Registry,
 	memoryManager *memory.Manager,
+	docIngestor *ingestion.DocumentIngestor,
+	chatModel einomodel.ToolCallingChatModel,
+	hybridRetriever retriever.Retriever,
+	embedder embedding.Embedder,
+	githubMCP *mcp.GitHubMCP,
+	webMCP *mcp.WebSearchMCP,
+	mcpBridge *mcp.EinoBridge,
+	casualAgent *react.Agent,
+	ctxBuilder *contextmanager.ContextBuilder,
+	memHierarchy *contextmanager.MemoryHierarchy,
 ) *Orchestrator {
 	o := &Orchestrator{
 		intentRouter:    intentRouter,
 		interviewRunner: interviewRunner,
 		skillRegistry:   skillRegistry,
 		memory:          memoryManager,
+		docIngestor:     docIngestor,
+		chatModel:       chatModel,
+		hybridRetriever:  hybridRetriever,
+		embedder:        embedder,
+		githubMCP:       githubMCP,
+		webMCP:          webMCP,
+		mcpBridge:       mcpBridge,
+		casualAgent:     casualAgent,
+		ctxBuilder:      ctxBuilder,
+		memHierarchy:    memHierarchy,
 		states:          make(map[string]*nodes.InterviewState),
 		events:          newEventBus(),
 	}
@@ -113,6 +154,10 @@ func (o *Orchestrator) getState(sessionID string) (*nodes.InterviewState, error)
 	data, _ := json.Marshal(state)
 	var copy nodes.InterviewState
 	json.Unmarshal(data, &copy)
+	// Ensure maps are initialized (omitempty in JSON tags can produce nil maps)
+	if copy.InterruptData == nil {
+		copy.InterruptData = make(map[string]any)
+	}
 	return &copy, nil
 }
 
@@ -147,12 +192,34 @@ func (o *Orchestrator) CreateSession(ctx context.Context, req interaction.Create
 	return session, nil
 }
 
-func (o *Orchestrator) GetSession(ctx context.Context, sessionID string) (*model.Session, error) {
+func (o *Orchestrator) getOrRestoreState(ctx context.Context, sessionID string) (*nodes.InterviewState, error) {
 	state, err := o.getState(sessionID)
+	if err == nil {
+		return state, nil
+	}
+	// Fall back to checkpoint (server restart recovery)
+	state, err = o.interviewRunner.LoadCheckpoint(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	o.setState(sessionID, state)
+	return state, nil
+}
+
+func (o *Orchestrator) GetSession(ctx context.Context, sessionID string) (*model.Session, error) {
+	state, err := o.getOrRestoreState(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	return &model.Session{ID: sessionID, Status: state.Phase}, nil
+}
+
+// GetConversationHistory returns the recent conversation messages for a session.
+func (o *Orchestrator) GetConversationHistory(ctx context.Context, sessionID string) ([]model.Message, error) {
+	if o.memory == nil {
+		return nil, fmt.Errorf("memory not available")
+	}
+	return o.memory.GetConversationContext(ctx, sessionID, 50)
 }
 
 func (o *Orchestrator) ResumeSession(ctx context.Context, sessionID string) (*model.Session, error) {
@@ -165,7 +232,7 @@ func (o *Orchestrator) ResumeSession(ctx context.Context, sessionID string) (*mo
 }
 
 func (o *Orchestrator) ParseJD(ctx context.Context, sessionID string, rawJD string) (*model.JDAnalysis, error) {
-	state, err := o.getState(sessionID)
+	state, err := o.getOrRestoreState(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +266,7 @@ func (o *Orchestrator) ParseJD(ctx context.Context, sessionID string, rawJD stri
 }
 
 func (o *Orchestrator) UploadResume(ctx context.Context, sessionID string, fileData []byte, fileName string) (*model.ResumeMatch, error) {
-	state, err := o.getState(sessionID)
+	state, err := o.getOrRestoreState(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -228,18 +295,34 @@ func (o *Orchestrator) UploadResume(ctx context.Context, sessionID string, fileD
 }
 
 func (o *Orchestrator) GetQuestionPlan(ctx context.Context, sessionID string) (*model.QuestionPlan, error) {
-	state, err := o.getState(sessionID)
+	state, err := o.getOrRestoreState(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("[GetQuestionPlan] state.Phase=%s, JDAnalysis=%v, ResumeMatch=%v, QuestionPlan=%v",
+		state.Phase, state.JDAnalysis != nil, state.ResumeMatch != nil, state.QuestionPlan != nil)
+
 	if state.QuestionPlan == nil {
-		return nil, fmt.Errorf("question plan not yet generated")
+		if state.JDAnalysis != nil {
+			log.Printf("[GetQuestionPlan] Auto-generating questions from JD only (no resume)")
+			if err := o.interviewRunner.Graph().QuestionPlanning.Execute(ctx, state); err != nil {
+				return nil, fmt.Errorf("question planning failed: %w", err)
+			}
+			o.interviewRunner.SaveCheckpoint(ctx, state)
+			o.setState(sessionID, state)
+			log.Printf("[GetQuestionPlan] Questions generated: %d", len(state.QuestionQueue))
+		} else {
+			log.Printf("[GetQuestionPlan] JDAnalysis is nil, cannot auto-generate")
+		}
+	}
+	if state.QuestionPlan == nil {
+		return nil, fmt.Errorf("question plan not yet generated — JD analysis required first")
 	}
 	return state.QuestionPlan, nil
 }
 
 func (o *Orchestrator) StartInterview(ctx context.Context, sessionID string) (*interaction.InterviewEvent, error) {
-	state, err := o.getState(sessionID)
+	state, err := o.getOrRestoreState(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +343,9 @@ func (o *Orchestrator) StartInterview(ctx context.Context, sessionID string) (*i
 			if o.memory != nil && state.FinalReport != nil {
 				o.memory.UpdateSessionStatus(ctx, sessionID, model.PhaseCompleted)
 				o.memory.SaveInterviewResult(ctx, state.FinalReport, state.ReviewPlan)
+			}
+			if o.memHierarchy != nil {
+				go o.memHierarchy.ArchiveSessionSummary(context.Background(), sessionID, state.ChatHistory)
 			}
 			o.interviewRunner.SaveCheckpoint(ctx, state)
 			result := &interaction.InterviewEvent{
@@ -306,7 +392,7 @@ func (o *Orchestrator) SubmitAnswer(ctx context.Context, sessionID string, answe
 		})
 	}
 
-	state, err := o.getState(sessionID)
+	state, err := o.getOrRestoreState(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -341,31 +427,192 @@ func (o *Orchestrator) SubmitAnswer(ctx context.Context, sessionID string, answe
 
 	if isComplete {
 		result.Type = "complete"
-		// Persist final results to database immediately when interview ends
-		if o.memory != nil && state.FinalReport != nil {
-			if err := o.memory.UpdateSessionStatus(ctx, sessionID, model.PhaseCompleted); err != nil {
-				log.Printf("Warning: failed to update session status: %v", err)
-			}
-			if err := o.memory.SaveInterviewResult(ctx, state.FinalReport, state.ReviewPlan); err != nil {
-				log.Printf("Warning: failed to persist interview result on complete: %v", err)
-			}
-		}
 	}
 
-	// Publish event to WebSocket subscribers
+	// Publish event to WebSocket subscribers immediately
 	o.events.publish(sessionID, result)
 
-	// Save checkpoint after each answer
-	o.setState(sessionID, state)
-	if err := o.interviewRunner.SaveCheckpoint(ctx, state); err != nil {
-		log.Printf("Warning: checkpoint save failed for session %s: %v", sessionID, err)
+	if isComplete {
+		// Interview complete: run evaluation SYNCHRONOUSLY so the report is ready
+		o.interviewRunner.EvaluateAnswer(ctx, state)
+
+		// Always build a report, even if evaluations are empty
+		if state.FinalReport == nil {
+			state.FinalReport = o.buildReportFromState(state)
+		}
+		o.setState(sessionID, state)
+		o.interviewRunner.SaveCheckpoint(ctx, state)
+
+		// Always persist to DB so the report survives restarts
+		if o.memory != nil {
+			o.memory.UpdateSessionStatus(ctx, sessionID, model.PhaseCompleted)
+			if err := o.memory.SaveInterviewResult(ctx, state.FinalReport, state.ReviewPlan); err != nil {
+				log.Printf("[SubmitAnswer] Warning: failed to persist report: %v", err)
+			}
+		}
+		// Archive conversation summary (async)
+		if o.memHierarchy != nil {
+			go o.memHierarchy.ArchiveSessionSummary(context.Background(), sessionID, state.ChatHistory)
+		}
+	} else {
+		// Normal answer: save state immediately, run evaluation async for lower latency
+		o.setState(sessionID, state)
+		o.interviewRunner.SaveCheckpoint(ctx, state)
+
+		go func() {
+			bgCtx := context.Background()
+			o.interviewRunner.EvaluateAnswer(bgCtx, state)
+			o.setState(sessionID, state)
+			o.interviewRunner.SaveCheckpoint(bgCtx, state)
+
+			// Trigger async compression if conversation exceeds threshold
+			if o.memHierarchy != nil && len(state.ChatHistory) > 20 {
+				profile := contextmanager.Profile(nil, "interview_ask")
+				if len(state.ChatHistory)/2 > profile.CompressionThreshold {
+					compressed := o.ctxBuilder.Build(contextmanager.BuildParams{
+						ProfileName: "interview_ask",
+						History:     state.ChatHistory,
+						UserInput:   "",
+					})
+					if len(compressed) < len(state.ChatHistory) {
+						state.CompressedSummary = fmt.Sprintf("[compressed %d turns]", len(state.ChatHistory)/2)
+						state.CompressedUpToRound = state.CurrentQIndex
+						log.Printf("[Orchestrator] Compressed conversation for session %s (round %d)", sessionID, state.CurrentQIndex)
+					}
+				}
+			}
+		}()
 	}
 
 	return result, nil
 }
 
+// StreamSubmitAnswer streams the interviewer's response via SSE for real-time display.
+func (o *Orchestrator) StreamSubmitAnswer(ctx context.Context, sessionID string, answer string) (*schema.StreamReader[*schema.Message], error) {
+	if o.memory != nil {
+		o.memory.AppendConversation(ctx, sessionID, model.Message{
+			Role:    model.RoleUser,
+			Content: answer,
+		})
+	}
+
+	state, err := o.getOrRestoreState(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	stream, err := o.interviewRunner.Graph().Interviewer.ProcessAnswerStream(ctx, state, answer)
+	if err != nil {
+		return nil, fmt.Errorf("stream answer failed: %w", err)
+	}
+
+	// Collect the full response for state + memory, then run evaluation in background
+	reader, writer := schema.Pipe[*schema.Message](64)
+	go func() {
+		defer writer.Close()
+		defer stream.Close()
+		var full strings.Builder
+		for {
+			msg, err := stream.Recv()
+			if err != nil {
+				break
+			}
+			if msg != nil {
+				full.WriteString(msg.Content)
+				writer.Send(msg, nil)
+			}
+		}
+		response := full.String()
+
+		// Parse decision and update state
+		decision := o.interviewRunner.Graph().Interviewer.ParseDecision(response)
+		// Strip decision block from visible output
+		visible := response
+		if idx := strings.LastIndex(response, `{"action"`); idx >= 0 {
+			visible = strings.TrimSpace(response[:idx])
+		} else if idx := strings.LastIndex(response, `{ "action"`); idx >= 0 {
+			visible = strings.TrimSpace(response[:idx])
+		}
+		action := o.interviewRunner.Graph().Interviewer.ApplyDecision(state, decision)
+
+		state.ChatHistory = append(state.ChatHistory, model.Message{
+			Role:    model.RoleAssistant,
+			Content: visible,
+		})
+
+		if o.memory != nil {
+			o.memory.AppendConversation(ctx, sessionID, model.Message{
+				Role:    model.RoleAssistant,
+				Content: visible,
+			})
+		}
+
+		// Run evaluation in background goroutine
+		go func() {
+			bgCtx := context.Background()
+			o.interviewRunner.EvaluateAnswer(bgCtx, state)
+			o.setState(sessionID, state)
+			o.interviewRunner.SaveCheckpoint(bgCtx, state)
+
+			if action == "complete" {
+				if o.memory != nil && state.FinalReport != nil {
+					o.memory.UpdateSessionStatus(bgCtx, sessionID, model.PhaseCompleted)
+					o.memory.SaveInterviewResult(bgCtx, state.FinalReport, state.ReviewPlan)
+				}
+				if o.memHierarchy != nil {
+					o.memHierarchy.ArchiveSessionSummary(bgCtx, sessionID, state.ChatHistory)
+				}
+			}
+		}()
+	}()
+
+	return reader, nil
+}
+
+// CompleteInterview forces the interview to end early and generates the final report.
+func (o *Orchestrator) CompleteInterview(ctx context.Context, sessionID string) (*interaction.InterviewEvent, error) {
+	state, err := o.getOrRestoreState(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Force completion
+	state.Phase = model.PhaseCompleted
+	state.NextAction = "complete"
+
+	// Run pending evaluation synchronously
+	o.interviewRunner.EvaluateAnswer(ctx, state)
+
+	// Build report from whatever evaluations we have
+	if state.FinalReport == nil {
+		state.FinalReport = o.buildReportFromState(state)
+	}
+
+	// Persist
+	o.setState(sessionID, state)
+	o.interviewRunner.SaveCheckpoint(ctx, state)
+
+	if o.memory != nil {
+		o.memory.UpdateSessionStatus(ctx, sessionID, model.PhaseCompleted)
+		if err := o.memory.SaveInterviewResult(ctx, state.FinalReport, state.ReviewPlan); err != nil {
+			log.Printf("[CompleteInterview] Warning: failed to persist report: %v", err)
+		}
+	}
+
+	// Archive conversation as a summarized session (async)
+	if o.memHierarchy != nil {
+		go o.memHierarchy.ArchiveSessionSummary(context.Background(), sessionID, state.ChatHistory)
+	}
+
+	return &interaction.InterviewEvent{
+		Type:      "complete",
+		SessionID: sessionID,
+		Data:      "面试已结束，报告已生成。",
+	}, nil
+}
+
 func (o *Orchestrator) SkipQuestion(ctx context.Context, sessionID string) (*interaction.InterviewEvent, error) {
-	state, err := o.getState(sessionID)
+	state, err := o.getOrRestoreState(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -385,72 +632,80 @@ func (o *Orchestrator) SkipQuestion(ctx context.Context, sessionID string) (*int
 func (o *Orchestrator) GetReport(ctx context.Context, sessionID string) (*model.Report, error) {
 	// Try in-memory state first
 	state, err := o.getState(sessionID)
-	if err != nil {
-		// Fall back to checkpoint
-		state, err = o.interviewRunner.LoadCheckpoint(ctx, sessionID)
-		if err != nil {
-			return nil, fmt.Errorf("session %s not found", sessionID)
+	if err == nil {
+		if state.FinalReport == nil {
+			state.FinalReport = o.buildReportFromState(state)
+			o.setState(sessionID, state)
 		}
-		// Sync back to memory
-		o.setState(sessionID, state)
+		if state.FinalReport != nil {
+			return state.FinalReport, nil
+		}
 	}
 
-	// Try to build report if not yet generated but evaluations exist
-	if state.FinalReport == nil && len(state.Evaluations) > 0 {
-		state.FinalReport = o.buildReportFromState(state)
-		o.setState(sessionID, state)
+	// Fall back to checkpoint
+	state, err = o.interviewRunner.LoadCheckpoint(ctx, sessionID)
+	if err == nil {
+		if state.FinalReport == nil {
+			state.FinalReport = o.buildReportFromState(state)
+			o.setState(sessionID, state)
+		}
+		if state.FinalReport != nil {
+			return state.FinalReport, nil
+		}
 	}
 
-	if state.FinalReport == nil {
-		return nil, fmt.Errorf("report not yet generated — please complete the interview first")
-	}
-
-	// Persist to long-term memory
+	// Final fallback: long-term database
 	if o.memory != nil {
-		if err := o.memory.SaveInterviewResult(ctx, state.FinalReport, state.ReviewPlan); err != nil {
-			log.Printf("Warning: failed to save interview result: %v", err)
+		report, err := o.memory.GetInterviewResult(ctx, sessionID)
+		if err == nil && report != nil {
+			return report, nil
 		}
+		log.Printf("[GetReport] DB fallback failed for session %s: %v", sessionID, err)
 	}
 
-	return state.FinalReport, nil
+	return nil, fmt.Errorf("report not found for session %s — the interview may not have been completed or the data has expired", sessionID)
 }
 
 func (o *Orchestrator) GetReviewPlan(ctx context.Context, sessionID string) (*model.ReviewPlan, error) {
 	// Try in-memory state first
 	state, err := o.getState(sessionID)
-	if err != nil {
-		// Fall back to checkpoint
-		state, err = o.interviewRunner.LoadCheckpoint(ctx, sessionID)
-		if err != nil {
-			return nil, fmt.Errorf("session %s not found", sessionID)
-		}
-		o.setState(sessionID, state)
-	}
-
-	if state.ReviewPlan != nil {
+	if err == nil && state.ReviewPlan != nil {
 		return state.ReviewPlan, nil
 	}
 
-	// Try to generate review plan on-the-fly if evaluations exist
-	if len(state.Evaluations) > 0 {
-		if state.FinalReport == nil {
-			state.FinalReport = o.buildReportFromState(state)
+	// Fall back to checkpoint
+	state, err = o.interviewRunner.LoadCheckpoint(ctx, sessionID)
+	if err == nil && state != nil {
+		if state.ReviewPlan != nil {
+			return state.ReviewPlan, nil
 		}
-		if err := o.interviewRunner.Graph().ReviewPlanning.Execute(ctx, state); err != nil {
-			log.Printf("Warning: on-the-fly review planning failed: %v", err)
-			return nil, fmt.Errorf("review plan not yet available")
-		}
-		o.setState(sessionID, state)
-		// Persist to database after on-the-fly generation
-		if o.memory != nil {
-			if err := o.memory.SaveInterviewResult(ctx, state.FinalReport, state.ReviewPlan); err != nil {
-				log.Printf("Warning: failed to persist review plan: %v", err)
+		// Try to generate review plan on-the-fly if evaluations exist
+		if len(state.Evaluations) > 0 {
+			if state.FinalReport == nil {
+				state.FinalReport = o.buildReportFromState(state)
+			}
+			if err := o.interviewRunner.Graph().ReviewPlanning.Execute(ctx, state); err != nil {
+				log.Printf("Warning: on-the-fly review planning failed: %v", err)
+			} else {
+				o.setState(sessionID, state)
+				if o.memory != nil {
+					o.memory.SaveInterviewResult(ctx, state.FinalReport, state.ReviewPlan)
+				}
+				return state.ReviewPlan, nil
 			}
 		}
-		return state.ReviewPlan, nil
 	}
 
-	return nil, fmt.Errorf("review plan not yet generated — please complete the interview first")
+	// Final fallback: long-term database
+	if o.memory != nil {
+		plan, err := o.memory.GetReviewPlanFromDB(ctx, sessionID)
+		if err == nil && plan != nil {
+			return plan, nil
+		}
+		log.Printf("[GetReviewPlan] DB fallback failed for session %s: %v", sessionID, err)
+	}
+
+	return nil, fmt.Errorf("review plan not found for session %s", sessionID)
 }
 
 // buildReportFromState constructs a report from in-memory evaluations.
@@ -494,14 +749,34 @@ func (o *Orchestrator) buildReportFromState(state *nodes.InterviewState) *model.
 		}
 	}
 
+	score100 := overallScore * 10
+
+	questionReviews := make([]string, 0, len(state.Evaluations))
+	for _, eval := range state.Evaluations {
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Q%s (%.0f分)", eval.QuestionID, eval.TotalScore*10))
+		if eval.Praise != "" {
+			sb.WriteString(fmt.Sprintf("\n👍 亮点：%s", eval.Praise))
+		}
+		if eval.Issues != "" {
+			sb.WriteString(fmt.Sprintf("\n⚠️ 不足：%s", eval.Issues))
+		}
+		if eval.Improvement != "" {
+			sb.WriteString(fmt.Sprintf("\n💡 建议：%s", eval.Improvement))
+		}
+		questionReviews = append(questionReviews, sb.String())
+	}
+
 	return &model.Report{
-		SessionID:      state.SessionID,
-		OverallScore:   overallScore,
-		DimensionScore: dimensionAvg,
-		Evaluations:    state.Evaluations,
-		Highlights:     highlights,
-		WeakAreas:      weakAreas,
-		Summary:        fmt.Sprintf("Interview completed. Overall score: %.2f. %d areas need improvement.", overallScore, len(weakAreas)),
+		SessionID:       state.SessionID,
+		OverallScore:    overallScore,
+		Score100:        score100,
+		DimensionScore:  dimensionAvg,
+		Evaluations:     state.Evaluations,
+		Highlights:      highlights,
+		WeakAreas:       weakAreas,
+		QuestionReviews: questionReviews,
+		Summary:         fmt.Sprintf("Interview completed. Overall score: %.2f. %d areas need improvement.", overallScore, len(weakAreas)),
 	}
 }
 
@@ -511,25 +786,55 @@ func (o *Orchestrator) HandleMessage(ctx context.Context, sessionID string, msg 
 		history, _ = o.memory.GetConversationContext(ctx, sessionID, 10)
 	}
 
-	response, err := o.intentRouter.Route(ctx, sessionID, msg, history)
-	if err != nil {
-		return &interaction.MessageResponse{
-			Intent: "error",
-			Reply:  fmt.Sprintf("Sorry, I encountered an error: %v", err),
-		}, err
+	// Pre-parse skill:name:input prefix to bypass LLM classification for skill messages.
+	var response string
+	var intent string
+
+	if parts := strings.SplitN(msg, ":", 3); len(parts) == 3 && parts[0] == "skill" {
+		skillName := parts[1]
+		actualInput := parts[2]
+		intent = string(router.IntentSkillPractice)
+
+		resp, err := o.HandleSkill(ctx, sessionID, skillName, actualInput, "")
+		if err != nil {
+			return &interaction.MessageResponse{
+				Intent: "error",
+				Reply:  fmt.Sprintf("Sorry, I encountered an error: %v", err),
+			}, err
+		}
+		response = resp
+	} else {
+		var err error
+		response, err = o.intentRouter.Route(ctx, sessionID, msg, history)
+		if err != nil {
+			return &interaction.MessageResponse{
+				Intent: "error",
+				Reply:  fmt.Sprintf("Sorry, I encountered an error: %v", err),
+			}, err
+		}
+
+		result, _ := o.intentRouter.Classify(ctx, sessionID, msg, history)
+		if result != nil {
+			intent = string(result.Intent)
+		}
 	}
 
-	result, _ := o.intentRouter.Classify(ctx, sessionID, msg)
-
+	// Persist both user message and assistant response atomically so the next
+	// request sees the full turn.
 	if o.memory != nil && sessionID != "" {
+		o.memory.AppendConversation(ctx, sessionID, model.Message{
+			Role:    model.RoleUser,
+			Content: msg,
+		})
 		o.memory.AppendConversation(ctx, sessionID, model.Message{
 			Role:    model.RoleAssistant,
 			Content: response,
 		})
+		o.memory.UpdateSessionStatus(ctx, sessionID, model.PhaseActive)
 	}
 
 	return &interaction.MessageResponse{
-		Intent: string(result.Intent),
+		Intent: intent,
 		Reply:  response,
 	}, nil
 }
@@ -594,8 +899,25 @@ func (o *Orchestrator) GetReviewPlanStr(ctx context.Context, sessionID string) (
 }
 
 // HandleSkill implements router.SkillServiceDelegate.
-func (o *Orchestrator) HandleSkill(ctx context.Context, sessionID string, subIntent string, input string) (string, error) {
-	resp, err := o.skillRegistry.Dispatch(ctx, sessionID, subIntent, input)
+func (o *Orchestrator) HandleSkill(ctx context.Context, sessionID string, subIntent string, input string, ragDocuments string) (string, error) {
+	// Empty input means the user just started the skill — return welcome message.
+	if input == "" || input == "start" {
+		if welcome := o.skillRegistry.Welcome(subIntent); welcome != "" {
+			return welcome, nil
+		}
+	}
+
+	// Augment with MCP search results
+	mcpDocs := o.searchMCPForSkill(ctx, subIntent, input)
+	if mcpDocs != "" {
+		if ragDocuments != "" {
+			ragDocuments += "\n\n" + mcpDocs
+		} else {
+			ragDocuments = mcpDocs
+		}
+	}
+
+	resp, err := o.skillRegistry.Dispatch(ctx, sessionID, subIntent, input, ragDocuments)
 	if err != nil {
 		return "", err
 	}
@@ -607,13 +929,316 @@ func (o *Orchestrator) HandleSkill(ctx context.Context, sessionID string, subInt
 }
 
 // ListSkills implements router.SkillServiceDelegate.
-func (o *Orchestrator) ListSkills(ctx context.Context) ([]string, error) {
-	skills := o.skillRegistry.List()
-	names := make([]string, 0, len(skills))
-	for name := range skills {
-		names = append(names, name)
+func (o *Orchestrator) ListSkills(ctx context.Context) (map[string]string, error) {
+	return o.skillRegistry.List(), nil
+}
+
+// UploadDocuments implements interaction.InterviewService.
+func (o *Orchestrator) UploadDocuments(ctx context.Context, files []interaction.UploadFile) (*interaction.UploadResult, error) {
+	if o.docIngestor == nil {
+		return nil, fmt.Errorf("document ingestion service not available — check vector/keyword backend configuration")
 	}
-	return names, nil
+
+	result := &interaction.UploadResult{
+		TotalFiles: len(files),
+		Files:      make([]string, 0),
+		Errors:     make([]string, 0),
+	}
+	for _, f := range files {
+		ingestResult, err := o.docIngestor.Ingest(ctx, f.FileName, f.Content)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", f.FileName, err))
+			continue
+		}
+		result.TotalChunks += ingestResult.Chunks
+		result.Files = append(result.Files, f.FileName)
+	}
+
+	return result, nil
+}
+
+// ListDocuments implements interaction.InterviewService.
+func (o *Orchestrator) ListDocuments(ctx context.Context) ([]interaction.DocInfo, error) {
+	if o.docIngestor == nil {
+		return []interaction.DocInfo{}, nil
+	}
+	entries, err := o.docIngestor.ListDocuments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]interaction.DocInfo, len(entries))
+	for i, e := range entries {
+		result[i] = interaction.DocInfo{ID: e.SourceFile, SourceFile: e.SourceFile}
+	}
+	return result, nil
+}
+
+// StreamMessage implements interaction.InterviewService.
+func (o *Orchestrator) StreamMessage(ctx context.Context, sessionID string, msg string) (*schema.StreamReader[*schema.Message], error) {
+	log.Printf("[stream] StreamMessage called, casualAgent=%v, hybridRetriever=%v", o.casualAgent != nil, o.hybridRetriever != nil)
+
+	// Use ReAct Agent for casual chat when MCP tools are available
+	if o.casualAgent != nil {
+		log.Printf("[stream] using agent path")
+		return o.streamViaAgent(ctx, sessionID, msg)
+	}
+
+	log.Printf("[stream] using fallback LLM path")
+	// Save user message so it appears in history on the next request.
+	if o.memory != nil && sessionID != "" {
+		o.memory.AppendConversation(ctx, sessionID, model.Message{Role: model.RoleUser, Content: msg})
+	}
+
+	// Fallback: direct LLM stream with RAG injection
+	systemPrompt := "## 角色\n你是 InterviewAgent，一个专注于职业发展与面试准备的 AI 助手。\n\n## 行为准则\n- 回答简洁、友好、专业\n- 使用与用户相同的语言\n- 对于技术问题，尽量给出具体、可操作的答案\n- 不要编造信息，不确定时如实说明"
+
+	ragDocs := ""
+	if o.hybridRetriever != nil {
+		docs, err := o.hybridRetriever.Retrieve(ctx, msg, retriever.WithTopK(3))
+		if err == nil && len(docs) > 0 {
+			ragDocs = rag.FormatDocuments(docs)
+		}
+	}
+
+	var history []model.Message
+	if o.memory != nil && sessionID != "" {
+		history, _ = o.memory.GetConversationContext(ctx, sessionID, 6)
+	}
+
+	var messages []*schema.Message
+	if o.ctxBuilder != nil {
+		messages = o.ctxBuilder.Build(contextmanager.BuildParams{
+			ProfileName:  "stream_fallback",
+			SystemPrompt: systemPrompt,
+			History:      history,
+			RAGDocuments: ragDocs,
+			UserInput:    msg,
+		})
+	} else {
+		if ragDocs != "" {
+			systemPrompt += "\n\n## Reference Knowledge\nUse the following reference documents to inform your answer if relevant:\n" + ragDocs
+		}
+		messages = []*schema.Message{schema.SystemMessage(systemPrompt)}
+		for _, m := range history {
+			messages = append(messages, &schema.Message{Role: schema.RoleType(m.Role), Content: m.Content})
+		}
+		messages = append(messages, schema.UserMessage(msg))
+	}
+
+	stream, err := o.chatModel.Stream(ctx, messages)
+	if err != nil {
+		return nil, err
+	}
+	if stream == nil {
+		return nil, fmt.Errorf("chat model returned nil stream")
+	}
+	return o.wrapStreamForMemory(ctx, sessionID, stream), nil
+}
+
+// wrapStreamForMemory collects streamed content and saves it as an AI response.
+func (o *Orchestrator) wrapStreamForMemory(ctx context.Context, sessionID string, inner *schema.StreamReader[*schema.Message]) *schema.StreamReader[*schema.Message] {
+	if o.memory == nil || sessionID == "" {
+		return inner
+	}
+	reader, writer := schema.Pipe[*schema.Message](64)
+	go func() {
+		defer writer.Close()
+		defer inner.Close()
+		var full strings.Builder
+		for {
+			msg, err := inner.Recv()
+			if err != nil {
+				break
+			}
+			if msg != nil {
+				full.WriteString(msg.Content)
+				writer.Send(msg, nil)
+			}
+		}
+		if full.Len() > 0 {
+			o.memory.AppendConversation(ctx, sessionID, model.Message{Role: model.RoleAssistant, Content: full.String()})
+			o.memory.UpdateSessionStatus(ctx, sessionID, model.PhaseActive)
+		}
+	}()
+	return reader
+}
+
+// streamViaAgent uses the ReAct Agent (LLM + MCP tools) for streaming casual chat.
+func (o *Orchestrator) streamViaAgent(ctx context.Context, sessionID string, msg string) (*schema.StreamReader[*schema.Message], error) {
+	log.Printf("[stream-agent] building prompt")
+	systemPrompt := `## 角色定义
+你是 InterviewAgent，一个专注于职业发展与面试准备的 AI 助手。你配备了搜索工具，可以实时查询 GitHub 仓库和网络信息。
+
+## 工作范围
+- 回答技术问题、职业发展咨询、面试准备等问题
+- 当用户询问具体技术信息（代码示例、文档、开源项目、事实数据）时，必须先使用搜索工具获取最新信息
+- 如果用户想进行模拟面试或技能练习，引导他们使用对应功能模块
+
+## 工具使用权限
+- GitHub 搜索：查找开源项目、README、代码示例
+- 网络搜索：查找教程、技术文档、最新资讯
+- 重要：对具体技术问题，必须优先使用工具获取真实信息，不得凭空编造
+
+## 边界限制
+- 不得编造信息或假装知道不确定的内容——使用工具验证
+- 不得以"I cannot..."回避可以通过工具解决的问题
+- 不得提供医疗、法律、金融等专业建议
+- 不得执行任何修改用户系统或文件的请求
+
+## 行为准则
+- 使用与用户相同的语言回复
+- 回复简洁、友好、有帮助
+- 技术回答应具体、可操作，引用搜索到的实际信息`
+
+	// RAG injection
+	log.Printf("[stream-agent] RAG: hybridRetriever=%v", o.hybridRetriever != nil)
+	ragDocs := ""
+	if o.hybridRetriever != nil {
+		log.Printf("[stream-agent] calling hybridRetriever.Retrieve")
+		docs, err := o.hybridRetriever.Retrieve(ctx, msg, retriever.WithTopK(3))
+		log.Printf("[stream-agent] Retrieve done: err=%v, docs=%d", err, len(docs))
+		if err == nil && len(docs) > 0 {
+			ragDocs = rag.FormatDocuments(docs)
+		}
+	}
+
+	log.Printf("[stream-agent] memory=%v session=%q", o.memory != nil, sessionID)
+	var history []model.Message
+	if o.memory != nil && sessionID != "" {
+		history, _ = o.memory.GetConversationContext(ctx, sessionID, 6)
+		log.Printf("[stream-agent] history len=%d", len(history))
+	}
+
+	var einoMsgs []*schema.Message
+	if o.ctxBuilder != nil {
+		einoMsgs = o.ctxBuilder.Build(contextmanager.BuildParams{
+			ProfileName:  "stream_agent",
+			SystemPrompt: systemPrompt,
+			History:      history,
+			RAGDocuments: ragDocs,
+			UserInput:    msg,
+		})
+	} else {
+		if ragDocs != "" {
+			systemPrompt += "\n\n## Reference Knowledge\n" + ragDocs
+		}
+		einoMsgs = []*schema.Message{schema.SystemMessage(systemPrompt)}
+		for _, m := range history {
+			switch m.Role {
+			case "user":
+				einoMsgs = append(einoMsgs, schema.UserMessage(m.Content))
+			case "assistant":
+				einoMsgs = append(einoMsgs, schema.AssistantMessage(m.Content, nil))
+			}
+		}
+		einoMsgs = append(einoMsgs, schema.UserMessage(msg))
+	}
+
+	// Save user message to conversation history
+	if o.memory != nil && sessionID != "" {
+		o.memory.AppendConversation(ctx, sessionID, model.Message{Role: model.RoleUser, Content: msg})
+	}
+
+	// Use agent.Generate (not Stream) because DeepSeek outputs text before
+	// tool calls, which the default StreamToolCallChecker cannot handle.
+	log.Printf("[stream-agent] calling agent.Generate(%d msgs)", len(einoMsgs))
+	resp, err := o.casualAgent.Generate(ctx, einoMsgs)
+	if err != nil {
+		return nil, fmt.Errorf("agent generate failed: %w", err)
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("agent returned nil response")
+	}
+	// Wrap single response as a stream for the SSE handler
+	reader, writer := schema.Pipe[*schema.Message](1)
+	go func() {
+		writer.Send(resp, nil)
+		writer.Close()
+	}()
+	return o.wrapStreamForMemory(ctx, sessionID, reader), nil
+}
+
+// ListSessions implements interaction.InterviewService.
+func (o *Orchestrator) ListSessions(ctx context.Context, userID string) ([]interaction.SessionSummary, error) {
+	if o.memory == nil {
+		return []interaction.SessionSummary{}, nil
+	}
+	ms, err := o.memory.ListSessionSummaries(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]interaction.SessionSummary, len(ms))
+	for i, m := range ms {
+		result[i] = interaction.SessionSummary{
+			ID:           m.ID,
+			Status:       m.Status,
+			OverallScore: m.OverallScore,
+			CreatedAt:    m.CreatedAt,
+			LastMessage:  m.LastMessage,
+		}
+	}
+	return result, nil
+}
+
+// DeleteDocument implements interaction.InterviewService.
+func (o *Orchestrator) DeleteDocument(ctx context.Context, docID string) error {
+	if o.docIngestor == nil {
+		return fmt.Errorf("document ingestion service not available")
+	}
+	return o.docIngestor.DeleteDocument(ctx, docID)
+}
+
+// searchMCPForSkill augments skill practice with MCP search results.
+func (o *Orchestrator) searchMCPForSkill(ctx context.Context, subIntent string, input string) string {
+	var parts []string
+	query := fmt.Sprintf("%s %s", subIntent, input)
+
+	if o.githubMCP != nil {
+		repos, err := o.githubMCP.SearchRepositories(ctx, query, 3)
+		if err == nil && len(repos) > 0 {
+			parts = append(parts, "### GitHub Repositories\n"+mcp.FormatGitHubResults(repos))
+		}
+	}
+
+	if o.webMCP != nil {
+		webResults, err := o.webMCP.Search(ctx, query, 3)
+		if err == nil && len(webResults) > 0 {
+			parts = append(parts, "### Web Results\n"+mcp.FormatWebResults(webResults))
+		}
+	}
+
+	if len(parts) > 0 {
+		return "## External Resources (Real-time Search)\n" + strings.Join(parts, "\n")
+	}
+	return ""
+}
+
+// ListSkillInfos implements interaction.InterviewService.
+func (o *Orchestrator) ListSkillInfos(ctx context.Context) ([]interaction.SkillInfo, error) {
+	skills := o.skillRegistry.List()
+	result := make([]interaction.SkillInfo, 0, len(skills))
+	for name, desc := range skills {
+		result = append(result, interaction.SkillInfo{Name: name, Description: desc, Category: o.skillRegistry.Category(name)})
+	}
+	return result, nil
+}
+
+// ListAvailableTools implements interaction.InterviewService.
+// Uses EinoBridge to dynamically discover tools from MCP servers.
+func (o *Orchestrator) ListAvailableTools(ctx context.Context) ([]interaction.ToolInfo, error) {
+	if o.mcpBridge == nil {
+		return nil, nil
+	}
+	summaries := o.mcpBridge.ListToolSummaries(ctx)
+	tools := make([]interaction.ToolInfo, len(summaries))
+	for i, s := range summaries {
+		tools[i] = interaction.ToolInfo{
+			Name:        s.Name,
+			Server:      s.Server,
+			Description: s.Description,
+		}
+	}
+	return tools, nil
 }
 
 // ensure we implement the delegate interfaces

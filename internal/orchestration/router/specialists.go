@@ -17,8 +17,8 @@ type InterviewServiceDelegate interface {
 
 // SkillServiceDelegate is the minimal interface for skill-related messages.
 type SkillServiceDelegate interface {
-	HandleSkill(ctx context.Context, sessionID string, subIntent string, input string) (string, error)
-	ListSkills(ctx context.Context) ([]string, error)
+	HandleSkill(ctx context.Context, sessionID string, subIntent string, input string, ragDocuments string) (string, error)
+	ListSkills(ctx context.Context) (map[string]string, error)
 }
 
 // InterviewSpecialist handles interview intent messages.
@@ -105,14 +105,19 @@ func (s *SkillPracticeSpecialist) Handle(ctx context.Context, sessionID string, 
 			return "", err
 		}
 		msg := "Available practice modules:\n"
-		for _, name := range skills {
-			msg += fmt.Sprintf("  - %s\n", name)
+		for name, desc := range skills {
+			msg += fmt.Sprintf("  - %s: %s\n", name, desc)
 		}
 		msg += "\nType the name of a module to start. For example: 'algorithm' or 'system_design'"
 		return msg, nil
 	}
 
-	response, err := s.service.HandleSkill(ctx, sessionID, subIntent, input)
+	ragDocuments := ""
+	if metadata != nil {
+		ragDocuments = metadata["rag_documents"]
+	}
+
+	response, err := s.service.HandleSkill(ctx, sessionID, subIntent, input, ragDocuments)
 	if err != nil {
 		return "", fmt.Errorf("skill practice failed: %w", err)
 	}

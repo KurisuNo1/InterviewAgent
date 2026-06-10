@@ -16,6 +16,9 @@ type InterviewState struct {
 	ResumeMatch  *model.ResumeMatch  `json:"resume_match,omitempty"`
 	QuestionPlan *model.QuestionPlan `json:"question_plan,omitempty"`
 
+	// RAG reference documents (populated by question planning, consumed by interviewer)
+	RAGDocuments string `json:"rag_documents,omitempty"`
+
 	// Interview loop state
 	QuestionQueue   []model.Question `json:"question_queue"`
 	CurrentQIndex   int              `json:"current_q_index"`
@@ -25,6 +28,10 @@ type InterviewState struct {
 
 	// Conversation history
 	ChatHistory []model.Message `json:"chat_history"`
+
+	// Compressed conversation state (for context window management)
+	CompressedSummary    string `json:"compressed_summary,omitempty"`
+	CompressedUpToRound  int    `json:"compressed_up_to_round"`
 
 	// Results
 	Answers     []model.Answer     `json:"answers,omitempty"`
@@ -46,7 +53,7 @@ type InterviewState struct {
 
 	// Checkpoint metadata
 	CheckpointID  string         `json:"checkpoint_id,omitempty"`
-	InterruptData map[string]any `json:"interrupt_data,omitempty"`
+	InterruptData map[string]any `json:"interrupt_data"`
 }
 
 // InterviewEvent represents a single step result in the interview loop.

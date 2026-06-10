@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/KurisuNo1/InterviewAgent/internal/capability/llm"
+	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
 	"github.com/KurisuNo1/InterviewAgent/internal/model"
 
 	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/interview/nodes/prompts"
@@ -14,11 +15,11 @@ import (
 
 // ResumeMatchingNode compares a resume against the JD.
 type ResumeMatchingNode struct {
-	chatModel llm.ChatModel
+	chatModel einomodel.ToolCallingChatModel
 }
 
 // NewResumeMatchingNode creates a new resume matching node.
-func NewResumeMatchingNode(chatModel llm.ChatModel) *ResumeMatchingNode {
+func NewResumeMatchingNode(chatModel einomodel.ToolCallingChatModel) *ResumeMatchingNode {
 	return &ResumeMatchingNode{chatModel: chatModel}
 }
 
@@ -34,10 +35,10 @@ func (n *ResumeMatchingNode) Execute(ctx context.Context, state *InterviewState)
 	}
 	jdJSON, _ := json.Marshal(state.JDAnalysis)
 
-	prompt := fmt.Sprintf(prompts.ResumeMatchSystemPrompt, string(jdJSON), resumeText)
-	resp, err := n.chatModel.Chat(ctx, []llm.Message{
-		{Role: "system", Content: prompt},
-		{Role: "user", Content: "Please compare this resume with the job requirements."},
+	prompt := safeFmt(prompts.ResumeMatchSystemPrompt, string(jdJSON), resumeText)
+	resp, err := n.chatModel.Generate(ctx, []*schema.Message{
+		schema.SystemMessage(prompt),
+		schema.UserMessage("Please compare this resume with the job requirements."),
 	})
 	if err != nil {
 		return fmt.Errorf("resume matching failed: %w", err)

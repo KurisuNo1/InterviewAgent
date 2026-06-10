@@ -1,0 +1,192 @@
+/* ===== Page Header ===== */
+.kb-hero {
+  text-align: center;
+  padding: 48rpx 30rpx 24rpx;
+  animation: fadeIn 0.5s ease-out;
+}
+
+.kb-hero-icon {
+  width: 100rpx;
+  height: 100rpx;
+  border-radius: 50%;
+  background: var(--gradient-blue);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20rpx;
+  box-shadow: 0 8rpx 28rpx rgba(59, 130, 246, 0.25);
+}
+
+.kb-hero-icon-text {
+  font-size: 48rpx;
+}
+
+.kb-hero-title {
+  font-size: 38rpx;
+  font-weight: 800;
+  display: block;
+  margin-bottom: 10rpx;
+}
+
+.kb-hero-desc {
+  font-size: 26rpx;
+  color: var(--text-muted);
+}
+
+/* ===== Upload Zone ===== */
+.upload-zone {
+  border: 2rpx dashed var(--border);
+  border-radius: var(--radius-lg);
+  padding: 48rpx 30rpx;
+  text-align: center;
+  margin: 20rpx 26rpx;
+  background: var(--bg-secondary);
+  transition: all 0.2s ease;
+}
+
+.upload-zone:active {
+  border-color: var(--accent);
+  border-style: solid;
+  background: var(--bg-elevated);
+}
+
+.upload-icon-circle {
+  width: 88rpx;
+  height: 88rpx;
+  border-radius: 50%;
+  background: var(--accent-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20rpx;
+}
+
+.upload-icon {
+  font-size: 44rpx;
+}
+
+.upload-text {
+  font-size: 28rpx;
+  color: var(--text-secondary);
+  display: block;
+  margin-bottom: 8rpx;
+  font-weight: 600;
+}
+
+.upload-hint {
+  font-size: 24rpx;
+  color: var(--text-muted);
+}
+
+/* ===== Document Section ===== */
+.doc-section {
+  padding: 10rpx 26rpx 30rpx;
+}
+
+.doc-section-title {
+  font-size: 30rpx;
+  font-weight: 700;
+  margin-bottom: 18rpx;
+  color: var(--text-primary);
+  padding: 0 4rpx;
+}
+
+.doc-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 22rpx 24rpx;
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  margin-bottom: 10rpx;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.15s ease;
+}
+
+.doc-item:active {
+  background: var(--bg-elevated);
+}
+
+.doc-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+}
+
+.doc-type-icon {
+  width: 48rpx;
+  height: 48rpx;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24rpx;
+  flex-shrink: 0;
+  font-weight: 700;
+}
+
+.doc-type-icon.pdf {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.doc-type-icon.txt {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.doc-type-icon.docx {
+  background: var(--blue-light);
+  color: var(--blue);
+}
+
+.doc-name {
+  font-size: 28rpx;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.btn-del {
+  padding: 10rpx 24rpx;
+  font-size: 24rpx;
+  color: var(--danger);
+  background: transparent;
+  border: 1rpx solid var(--danger);
+  border-radius: var(--radius);
+  flex-shrink: 0;
+  margin-left: 16rpx;
+}
+
+.btn-del:active {
+  background: var(--danger-light);
+}
+
+/* ===== Empty State ===== */
+.kb-empty {
+  text-align: center;
+  padding: 80rpx 40rpx;
+}
+
+.kb-empty-icon {
+  font-size: 64rpx;
+  display: block;
+  margin-bottom: 18rpx;
+  opacity: 0.4;
+}
+
+.kb-empty-text {
+  color: var(--text-muted);
+  font-size: 28rpx;
+}
+
+.loading-text {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 80rpx;
+  font-size: 26rpx;
+}

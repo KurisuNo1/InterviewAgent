@@ -1,0 +1,21 @@
+<view class="login-container">
+  <view class="login-card">
+    <view class="login-logo">
+      <text class="login-logo-icon">🤖</text>
+    </view>
+    <text class="login-title">InterviewAgent</text>
+    <text class="login-desc">AI 模拟面试官，助你斩获心仪 Offer</text>
+
+    <button class="btn-wechat-login" bindtap="handleWeChatLogin"
+            loading="{{loading}}" disabled="{{loading}}">
+      <text wx:if="{{!loading}}">微信一键登录</text>
+      <text wx:else>登录中...</text>
+    </button>
+
+    <text wx:if="{{errorMsg}}" class="login-error">{{errorMsg}}</text>
+  </view>
+
+  <view class="login-bottom-note">
+    <text>登录即表示同意服务条款和隐私政策</text>
+  </view>
+</view>

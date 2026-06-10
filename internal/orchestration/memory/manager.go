@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/KurisuNo1/InterviewAgent/internal/model"
 )
@@ -19,13 +20,31 @@ func NewManager(short *ShortTermMemory, long *LongTermMemory) *Manager {
 }
 
 // AppendConversation adds a message to the session's conversation history.
+// It writes to both Redis (fast, ephemeral) and MySQL (durable, for recovery).
 func (m *Manager) AppendConversation(ctx context.Context, sessionID string, msg model.Message) error {
-	return m.short.Append(ctx, sessionID, msg)
+	if err := m.short.Append(ctx, sessionID, msg); err != nil {
+		return err
+	}
+	// MySQL save is best-effort; don't fail if it errors
+	if err := m.long.SaveMessage(ctx, sessionID, msg); err != nil {
+		log.Printf("Warning: failed to persist message to MySQL for session %s: %v", sessionID, err)
+	}
+	return nil
 }
 
 // GetConversationContext returns recent conversation messages for LLM prompting.
+// Falls back to MySQL if Redis returns no messages (e.g. after TTL expiry).
 func (m *Manager) GetConversationContext(ctx context.Context, sessionID string, window int) ([]model.Message, error) {
-	return m.short.GetRecent(ctx, sessionID, window)
+	msgs, err := m.short.GetRecent(ctx, sessionID, window)
+	if err != nil || len(msgs) == 0 {
+		// Redis miss — fall back to MySQL
+		mysqlMsgs, mysqlErr := m.long.GetMessages(ctx, sessionID, window)
+		if mysqlErr != nil {
+			return msgs, err // return original result if MySQL also fails
+		}
+		return mysqlMsgs, nil
+	}
+	return msgs, nil
 }
 
 // SaveSession persists a session to long-term storage.
@@ -58,6 +77,21 @@ func (m *Manager) SaveInterviewResult(ctx context.Context, report *model.Report,
 // GetUserHistory retrieves past interview results for context.
 func (m *Manager) GetUserHistory(ctx context.Context, userID string, limit int) ([]*model.Report, error) {
 	return m.long.GetUserHistory(ctx, userID, limit)
+}
+
+// GetInterviewResult retrieves a stored report from MySQL by session ID.
+func (m *Manager) GetInterviewResult(ctx context.Context, sessionID string) (*model.Report, error) {
+	return m.long.GetReport(ctx, sessionID)
+}
+
+// GetReviewPlanFromDB retrieves a stored review plan from MySQL by session ID.
+func (m *Manager) GetReviewPlanFromDB(ctx context.Context, sessionID string) (*model.ReviewPlan, error) {
+	return m.long.GetReviewPlan(ctx, sessionID)
+}
+
+// ListSessionSummaries returns all sessions for a user with basic info.
+func (m *Manager) ListSessionSummaries(ctx context.Context, userID string) ([]SessionSummary, error) {
+	return m.long.ListSessionSummaries(ctx, userID)
 }
 
 // ClearConversation removes a session's conversation history.

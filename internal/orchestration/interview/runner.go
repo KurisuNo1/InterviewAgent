@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/cloudwego/eino/compose"
@@ -70,21 +71,26 @@ func (r *Runner) ProcessAnswer(ctx context.Context, state *nodes.InterviewState,
 	if err != nil {
 		return "", "", err
 	}
+	return action, response, nil
+}
 
-	if action == "next_question" || action == "complete" {
+// EvaluateAnswer runs evaluation and review planning in the background.
+// Should be called after ProcessAnswer has returned the response to the user.
+func (r *Runner) EvaluateAnswer(ctx context.Context, state *nodes.InterviewState) {
+	if state.NextAction == "next_question" || state.NextAction == "complete" ||
+		state.Phase == model.PhaseCompleted || state.CurrentQIndex >= len(state.QuestionQueue) {
 		if evalErr := r.nodes.Evaluation.Execute(ctx, state); evalErr != nil {
 			log.Printf("[Runner] Evaluation warning: %v", evalErr)
+		} else {
+			r.adjustDifficulty(state)
 		}
-		r.adjustDifficulty(state)
 	}
 
-	if action == "complete" || state.Phase == model.PhaseCompleted || state.CurrentQIndex >= len(state.QuestionQueue) {
+	if state.NextAction == "complete" || state.Phase == model.PhaseCompleted || state.CurrentQIndex >= len(state.QuestionQueue) {
 		if planErr := r.nodes.ReviewPlanning.Execute(ctx, state); planErr != nil {
 			log.Printf("[Runner] Review planning warning: %v", planErr)
 		}
 	}
-
-	return action, response, nil
 }
 
 func (r *Runner) adjustDifficulty(state *nodes.InterviewState) {
@@ -163,6 +169,11 @@ func (r *Runner) LoadCheckpoint(ctx context.Context, sessionID string) (*nodes.I
 		return nil, fmt.Errorf("failed to unmarshal checkpoint: %w", err)
 	}
 
+	// Ensure maps are initialized (nil maps can result from omitempty in older checkpoints)
+	if state.InterruptData == nil {
+		state.InterruptData = make(map[string]any)
+	}
+
 	log.Printf("[Runner] Checkpoint loaded for session %s (phase=%s, q=%d/%d)",
 		sessionID, state.Phase, state.CurrentQIndex+1, len(state.QuestionQueue))
 	return &state, nil
@@ -227,14 +238,34 @@ func buildReportFromEvals(state *nodes.InterviewState) *model.Report {
 		}
 	}
 
+	score100 := overallScore * 10
+
+	questionReviews := make([]string, 0, len(state.Evaluations))
+	for _, eval := range state.Evaluations {
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Q%s (%.0f分)", eval.QuestionID, eval.TotalScore*10))
+		if eval.Praise != "" {
+			sb.WriteString(fmt.Sprintf("\n👍 亮点：%s", eval.Praise))
+		}
+		if eval.Issues != "" {
+			sb.WriteString(fmt.Sprintf("\n⚠️ 不足：%s", eval.Issues))
+		}
+		if eval.Improvement != "" {
+			sb.WriteString(fmt.Sprintf("\n💡 建议：%s", eval.Improvement))
+		}
+		questionReviews = append(questionReviews, sb.String())
+	}
+
 	return &model.Report{
-		SessionID:      state.SessionID,
-		OverallScore:   overallScore,
-		DimensionScore: dimensionAvg,
-		Evaluations:    state.Evaluations,
-		Highlights:     highlights,
-		WeakAreas:      weakAreas,
-		Summary:        fmt.Sprintf("Interview completed. Overall score: %.2f. %d areas need improvement.", overallScore, len(weakAreas)),
+		SessionID:       state.SessionID,
+		OverallScore:    overallScore,
+		Score100:        score100,
+		DimensionScore:  dimensionAvg,
+		Evaluations:     state.Evaluations,
+		Highlights:      highlights,
+		WeakAreas:       weakAreas,
+		QuestionReviews: questionReviews,
+		Summary:         fmt.Sprintf("Interview completed. Overall score: %.2f. %d areas need improvement.", overallScore, len(weakAreas)),
 	}
 }
 

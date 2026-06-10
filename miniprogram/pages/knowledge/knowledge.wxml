@@ -1,0 +1,35 @@
+<view class="container">
+  <view class="kb-hero">
+    <view class="kb-hero-icon">
+      <text class="kb-hero-icon-text">书</text>
+    </view>
+    <text class="kb-hero-title">知识库</text>
+    <text class="kb-hero-desc">上传文档构建你的专属知识库</text>
+  </view>
+
+  <view class="upload-zone" bindtap="chooseFile">
+    <view class="upload-icon-circle">
+      <text class="upload-icon">+</text>
+    </view>
+    <text class="upload-text">点击上传文件</text>
+    <text class="upload-hint">支持 PDF、TXT、DOCX 格式</text>
+  </view>
+
+  <view class="doc-section">
+    <text class="doc-section-title">已上传文档</text>
+    <view wx:if="{{loading}}" class="loading-text">加载中...</view>
+    <view wx:elif="{{documents.length===0}}" class="kb-empty">
+      <text class="kb-empty-icon">空的</text>
+      <text class="kb-empty-text">暂无文档，点击上方上传</text>
+    </view>
+    <view wx:for="{{documents}}" wx:key="id" class="doc-item">
+      <view class="doc-info">
+        <view class="doc-type-icon {{item.source_file.indexOf('.pdf')> -1?'pdf':item.source_file.indexOf('.doc')> -1?'docx':'txt'}}">
+          {{item.source_file.indexOf('.pdf')> -1?'PDF':item.source_file.indexOf('.doc')> -1?'DOC':'TXT'}}
+        </view>
+        <text class="doc-name">{{item.source_file}}</text>
+      </view>
+      <button class="btn-del" data-id="{{item.id}}" bindtap="deleteDoc">删除</button>
+    </view>
+  </view>
+</view>

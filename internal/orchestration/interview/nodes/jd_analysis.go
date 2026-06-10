@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/KurisuNo1/InterviewAgent/internal/capability/llm"
+	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
 	"github.com/KurisuNo1/InterviewAgent/internal/model"
 
 	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/interview/nodes/prompts"
@@ -14,11 +15,11 @@ import (
 
 // JDAnalysisNode parses a job description into structured requirements.
 type JDAnalysisNode struct {
-	chatModel llm.ChatModel
+	chatModel einomodel.ToolCallingChatModel
 }
 
 // NewJDAnalysisNode creates a new JD analysis node.
-func NewJDAnalysisNode(chatModel llm.ChatModel) *JDAnalysisNode {
+func NewJDAnalysisNode(chatModel einomodel.ToolCallingChatModel) *JDAnalysisNode {
 	return &JDAnalysisNode{chatModel: chatModel}
 }
 
@@ -30,10 +31,10 @@ func (n *JDAnalysisNode) Execute(ctx context.Context, state *InterviewState) err
 		log.Printf("[JDAnalysis] Warning: jd_text is empty or missing in InterruptData")
 	}
 
-	prompt := fmt.Sprintf(prompts.JDAnalysisSystemPrompt, jdText)
-	resp, err := n.chatModel.Chat(ctx, []llm.Message{
-		{Role: "system", Content: prompt},
-		{Role: "user", Content: "Please analyze this job description."},
+	prompt := safeFmt(prompts.JDAnalysisSystemPrompt, jdText)
+	resp, err := n.chatModel.Generate(ctx, []*schema.Message{
+		schema.SystemMessage(prompt),
+		schema.UserMessage("Please analyze this job description."),
 	})
 	if err != nil {
 		return fmt.Errorf("JD analysis failed: %w", err)

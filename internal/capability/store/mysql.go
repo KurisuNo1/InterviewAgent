@@ -5,9 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 )
 
 // MySQLClient wraps MySQL database operations.
@@ -73,6 +74,13 @@ func NewMySQLStore(cfg MySQLConfig) (*MySQLStore, error) {
 // migrate creates the necessary tables if they don't exist.
 func (m *MySQLStore) migrate(ctx context.Context) error {
 	queries := []string{
+		`CREATE TABLE IF NOT EXISTS users (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			username VARCHAR(64) NOT NULL UNIQUE,
+			password_hash VARCHAR(255) NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
 		`CREATE TABLE IF NOT EXISTS interview_sessions (
 			id VARCHAR(36) PRIMARY KEY,
 			user_id VARCHAR(64) DEFAULT '',
@@ -114,6 +122,16 @@ func (m *MySQLStore) migrate(ctx context.Context) error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (session_id) REFERENCES interview_sessions(id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+			`CREATE TABLE IF NOT EXISTS chat_messages (
+				id BIGINT AUTO_INCREMENT PRIMARY KEY,
+				session_id VARCHAR(36) NOT NULL,
+				role VARCHAR(16) NOT NULL,
+				content TEXT NOT NULL,
+				created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
+				INDEX idx_session (session_id, created_at),
+				FOREIGN KEY (session_id) REFERENCES interview_sessions(id)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 
 	for _, q := range queries {
@@ -122,7 +140,39 @@ func (m *MySQLStore) migrate(ctx context.Context) error {
 		}
 	}
 
+	// WeChat Mini-Program login support: alter existing users table.
+	// These are idempotent — "Duplicate column" errors (1060) are ignored.
+	wechatMigrations := []string{
+		`ALTER TABLE users ADD COLUMN wechat_openid VARCHAR(128) DEFAULT NULL`,
+		`ALTER TABLE users ADD UNIQUE INDEX idx_wechat_openid (wechat_openid)`,
+		`ALTER TABLE users ADD COLUMN wechat_unionid VARCHAR(128) DEFAULT NULL`,
+		`ALTER TABLE users ADD COLUMN nickname VARCHAR(64) DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN avatar_url VARCHAR(512) DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN auth_provider VARCHAR(16) DEFAULT 'password'`,
+		`ALTER TABLE users ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`,
+		`ALTER TABLE users MODIFY COLUMN username VARCHAR(64) NULL`,
+	}
+	for _, q := range wechatMigrations {
+		_, err := m.db.ExecContext(ctx, q)
+		if err != nil {
+			if isDuplicateColumn(err) {
+				continue
+			}
+			return fmt.Errorf("wechat migration failed: %w\nQuery: %s", err, q)
+		}
+	}
+
 	return nil
+}
+
+// isDuplicateColumn checks if a MySQL error is a duplicate column (1060) or
+// duplicate index (1061) error, meaning the migration was already applied.
+func isDuplicateColumn(err error) bool {
+	if me, ok := err.(*mysql.MySQLError); ok {
+		return me.Number == 1060 || me.Number == 1061
+	}
+	s := err.Error()
+	return strings.Contains(s, "Duplicate column") || strings.Contains(s, "Duplicate key")
 }
 
 // Exec executes a statement.

@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/KurisuNo1/InterviewAgent/internal/capability/llm"
+	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
 )
 
 // EvaluationMetric represents a named evaluation dimension.
@@ -46,11 +47,11 @@ type TopKExperiment struct {
 
 // RAGEvaluator evaluates RAG retrieval quality using LLM-based metrics.
 type RAGEvaluator struct {
-	chatModel llm.ChatModel
+	chatModel einomodel.ToolCallingChatModel
 }
 
 // NewRAGEvaluator creates a new RAG evaluator.
-func NewRAGEvaluator(chatModel llm.ChatModel) *RAGEvaluator {
+func NewRAGEvaluator(chatModel einomodel.ToolCallingChatModel) *RAGEvaluator {
 	return &RAGEvaluator{chatModel: chatModel}
 }
 
@@ -66,7 +67,7 @@ func (e *RAGEvaluator) Evaluate(ctx context.Context, query string, retrievedDocs
 
 	prompt := buildEvalPrompt(query, retrievedDocs, expectedAnswer)
 
-	resp, err := e.chatModel.Chat(ctx, []llm.Message{
+	resp, err := e.chatModel.Generate(ctx, []*schema.Message{
 		{Role: "user", Content: prompt},
 	})
 	if err != nil {

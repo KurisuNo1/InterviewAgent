@@ -1,0 +1,59 @@
+<view class="container" style="padding-bottom: {{kbHeight}}px;">
+  <!-- Header bar -->
+  <view class="chat-header">
+    <text class="chat-title">AI 闲聊</text>
+    <view class="chat-header-actions">
+      <button class="btn-sm" bindtap="showHistoryPanel">历史</button>
+      <button class="btn-sm" bindtap="newChat">新建</button>
+    </view>
+  </view>
+
+  <!-- Messages -->
+  <scroll-view class="chat-box" scroll-y scroll-into-view="{{scrollToId}}" scroll-with-animation>
+    <view id="msg-bottom"></view>
+    <view wx:if="{{messages.length===0}}" class="welcome">
+      <view class="welcome-icon">
+        <text class="welcome-icon-text">🤖</text>
+      </view>
+      <text class="welcome-title">InterviewAgent</text>
+      <text class="welcome-desc">你的 AI 面试助手。可以闲聊、模拟面试、练习技能，随时问我任何问题。</text>
+      <view class="welcome-hints">
+        <text class="welcome-hint">💡 面试技巧</text>
+        <text class="welcome-hint">📚 技术答疑</text>
+        <text class="welcome-hint">🎯 模拟练习</text>
+        <text class="welcome-hint">📝 简历优化</text>
+      </view>
+    </view>
+    <view wx:for="{{messages}}" wx:key="index" id="msg-{{index}}" class="msg {{item.role}}">
+      <view class="msg-avatar">{{item.role==='user'?'U':'AI'}}</view>
+      <view class="msg-content">{{item.content}}</view>
+    </view>
+    <view wx:if="{{typing}}" class="msg assistant">
+      <view class="msg-avatar">AI</view>
+      <view class="msg-content"><view class="typing-dots"><view></view><view></view><view></view></view></view>
+    </view>
+  </scroll-view>
+
+  <!-- Input -->
+  <view class="chat-input-area">
+    <textarea class="chat-input" value="{{inputText}}" placeholder="输入消息..." bindinput="onInput" bindconfirm="sendMessage" auto-height maxlength="2000" confirm-type="send" cursor-spacing="20" adjust-position="{{false}}" bindkeyboardheightchange="onKBChange"/>
+    <button class="btn-send" bindtap="sendMessage" disabled="{{sending||!inputText}}">➤</button>
+  </view>
+
+  <!-- History Modal -->
+  <view wx:if="{{showHistory}}" class="history-overlay" bindtap="hideHistoryPanel">
+    <view class="history-panel" catchtap="">
+      <view class="history-panel-header">
+        <text class="history-panel-title">对话历史</text>
+        <button class="btn-sm" bindtap="hideHistoryPanel">关闭</button>
+      </view>
+      <scroll-view class="history-list" scroll-y>
+        <view wx:if="{{historyList.length===0}}" class="history-empty">暂无历史对话</view>
+        <view wx:for="{{historyList}}" wx:key="id" class="hist-item" data-sid="{{item.id}}" bindtap="restoreChatSession">
+          <text class="hist-preview">{{item.last_message||'(无消息)'}}</text>
+          <text class="hist-meta">{{item.created_at}} {{item.overall_score>0?'· '+item.overall_score.toFixed(1)+'分':''}}</text>
+        </view>
+      </scroll-view>
+    </view>
+  </view>
+</view>

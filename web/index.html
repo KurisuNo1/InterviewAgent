@@ -1,165 +1,146 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>InterviewAgent — AI 模拟面试官</title>
-  <link rel="stylesheet" href="/web/css/style.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InterviewAgent - AI模拟面试官</title>
+<link rel="stylesheet" href="/web/css/style.css">
 </head>
 <body>
-  <div class="app-container">
-    <!-- 顶部导航 -->
-    <header class="app-header">
-      <div>
-        <span class="logo">🤖 InterviewAgent</span>
-        <span style="font-size:0.8rem;color:var(--text-muted);margin-left:12px;">AI 模拟面试官</span>
+<div id="app">
+  <!-- Sidebar -->
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <button id="btn-new-chat" class="btn-new-chat">+ 新对话</button>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-item active" data-mode="chat"><span class="nav-icon">&#x1F4AC;</span> AI 闲聊</div>
+      <div class="nav-item" data-mode="interview"><span class="nav-icon">&#x1F3A4;</span> 模拟面试</div>
+      <div class="nav-item" data-mode="skills"><span class="nav-icon">&#x1F4DA;</span> 技能练习</div>
+      <div class="nav-item" data-mode="knowledge"><span class="nav-icon">&#x1F4C1;</span> 知识库</div>
+    </nav>
+    <div class="sidebar-history" id="sidebar-history">
+      <div class="history-title">对话历史</div>
+      <div id="history-list"></div>
+    </div>
+    <div class="sidebar-recent" id="sidebar-recent" style="display:none">
+      <div class="history-title">最近消息</div>
+      <div id="recent-list"></div>
+    </div>
+    <div class="sidebar-footer">
+      <div class="user-info" id="user-info">
+        <span id="username-display">未登录</span>
+        <button id="btn-login" class="btn-sm">登录</button>
       </div>
-      <div style="display:flex;align-items:center;gap:12px;">
-        <span id="session-id-display" style="font-size:0.75rem;color:var(--text-muted);display:none;"></span>
-        <span id="status-badge" class="status-badge idle">待开始</span>
+      <div id="available-tools-sidebar" class="sidebar-tools" style="display:none">
+        <div class="tools-header" id="tools-toggle-sidebar">&#x1F6E0; 可用工具 (<span id="tools-count-sidebar">0</span>)</div>
+        <div id="tools-list-sidebar" class="tools-list" style="display:none"></div>
       </div>
-    </header>
+    </div>
+  </aside>
 
-    <!-- 步骤指示器 -->
-    <div class="steps">
-      <div class="step active" style="position:relative;">
-        <span class="step-line"></span>1. 岗位描述
+  <!-- Main -->
+  <main id="main">
+    <!-- Chat Mode -->
+    <div id="mode-chat" class="mode-content active">
+      <div id="chat-header" class="chat-header">
+        <button id="btn-toggle-sidebar" class="btn-icon">&#x2630;</button>
+        <span class="chat-title" id="chat-title">AI 闲聊</span>
+        <button id="btn-clear-chat" class="btn-sm">清空</button>
       </div>
-      <div class="step" style="position:relative;">
-        <span class="step-line"></span>2. JD 解析
+      <div id="chat-box" class="chat-box">
+        <div class="welcome-msg">
+          <h2>InterviewAgent</h2>
+          <p>我是你的 AI 面试助手。可以闲聊、模拟面试、练习技能。试试问我问题吧！</p>
+        </div>
       </div>
-      <div class="step" style="position:relative;">
-        <span class="step-line"></span>3. 简历匹配
+      <div id="chat-input-area" class="chat-input-area">
+        <textarea id="input-msg" placeholder="输入消息...（Enter 发送，Shift+Enter 换行）" rows="1"></textarea>
+        <button id="btn-send" class="btn-send">&#x27A4;</button>
       </div>
-      <div class="step" style="position:relative;">
-        <span class="step-line"></span>4. 模拟面试
-      </div>
-      <div class="step">5. 面试报告</div>
     </div>
 
-    <!-- 主内容区 -->
-    <main class="app-main">
-
-      <!-- ═══════════ 屏幕 1: 创建会话 + 输入 JD ═══════════ -->
-      <div id="screen-setup" class="screen">
-        <div class="card">
-          <div class="card-header"><span class="icon">📋</span> 创建面试会话</div>
-          <p style="color:var(--text-secondary);margin-bottom:18px;font-size:0.9rem;">
-            请粘贴岗位描述（JD），AI 将自动解析岗位要求，并结合您的简历进行个性化模拟面试。
-          </p>
-          <div class="form-group">
-            <label>岗位描述（JD）</label>
-            <textarea id="input-jd" placeholder="在此粘贴完整的岗位描述，包括：职位名称、岗位职责、技能要求、任职资格等..."></textarea>
+    <!-- Interview Mode -->
+    <div id="mode-interview" class="mode-content">
+      <div class="chat-header">
+        <button id="btn-toggle-sidebar-2" class="btn-icon">&#x2630;</button>
+        <span class="chat-title">模拟面试</span>
+        <button id="btn-interview-history" class="btn-sm" style="margin-left:auto">历史记录</button>
+      </div>
+      <!-- Step Progress Bar -->
+      <div class="interview-progress">
+        <div class="progress-step active" data-step="jd"><span class="step-num">1</span><span class="step-label">岗位描述</span></div>
+        <div class="progress-line"></div>
+        <div class="progress-step" data-step="resume"><span class="step-num">2</span><span class="step-label">简历上传</span></div>
+        <div class="progress-line"></div>
+        <div class="progress-step" data-step="interviewing"><span class="step-num">3</span><span class="step-label">模拟面试</span></div>
+        <div class="progress-line"></div>
+        <div class="progress-step" data-step="report"><span class="step-num">4</span><span class="step-label">面试报告</span></div>
+      </div>
+      <div class="interview-layout">
+        <div id="interview-content" class="interview-main"></div>
+        <div id="interview-sidebar" class="interview-sidebar" style="display:none">
+          <div class="sidebar-panel">
+            <h4>&#x1F4CA; 面试记录</h4>
+            <div id="interview-history-list"></div>
           </div>
-          <div class="btn-group">
-            <button id="btn-create-session" class="btn btn-primary">🚀 创建会话并解析 JD</button>
+          <div id="current-result-panel" class="sidebar-panel" style="display:none">
+            <h4>&#x1F3AF; 当前结果</h4>
+            <div id="current-result-content"></div>
           </div>
         </div>
       </div>
+    </div>
 
-      <!-- ═══════════ 屏幕 2: JD 解析结果 ═══════════ -->
-      <div id="screen-jd-result" class="screen">
-        <div class="card">
-          <div class="card-header"><span class="icon">🔍</span> JD 解析结果</div>
-          <div id="jd-analysis-content">
-            <div class="loading-overlay"><span class="spinner"></span> 正在解析岗位描述...</div>
-          </div>
-          <div class="btn-group">
-            <button id="btn-back-to-jd" class="btn btn-secondary">← 返回修改</button>
-            <button id="btn-go-resume" class="btn btn-primary">下一步：上传简历 →</button>
-          </div>
-        </div>
+    <!-- Skills Mode -->
+    <div id="mode-skills" class="mode-content">
+      <div class="chat-header">
+        <button id="btn-toggle-sidebar-3" class="btn-icon">&#x2630;</button>
+        <span class="chat-title">技能练习</span>
       </div>
+      <div id="skills-content" class="skills-content"></div>
+    </div>
 
-      <!-- ═══════════ 屏幕 3: 简历上传 ═══════════ -->
-      <div id="screen-resume-upload" class="screen">
-        <div class="card">
-          <div class="card-header"><span class="icon">📄</span> 上传简历</div>
-          <div class="form-group">
-            <label>选择简历文件（支持 PDF、Word、TXT）</label>
-            <input type="file" id="input-resume-file" accept=".pdf,.doc,.docx,.txt,.md" style="padding:10px;">
-          </div>
-          <div class="form-group">
-            <label>或者直接粘贴简历文本</label>
-            <textarea id="input-resume-text" class="small" placeholder="在此粘贴简历内容..."></textarea>
-          </div>
-          <div class="btn-group">
-            <button id="btn-upload-resume" class="btn btn-primary">📤 上传并匹配</button>
-          </div>
-        </div>
+    <!-- Knowledge Mode -->
+    <div id="mode-knowledge" class="mode-content">
+      <div class="chat-header">
+        <button id="btn-toggle-sidebar-4" class="btn-icon">&#x2630;</button>
+        <span class="chat-title">知识库</span>
       </div>
+      <div id="knowledge-content" class="knowledge-content"></div>
+    </div>
+  </main>
+</div>
 
-      <!-- ═══════════ 屏幕 4: 简历匹配结果 ═══════════ -->
-      <div id="screen-resume-result" class="screen">
-        <div class="card">
-          <div class="card-header"><span class="icon">🎯</span> 简历匹配分析</div>
-          <div id="resume-match-content">
-            <div class="loading-overlay"><span class="spinner"></span> 正在匹配简历与岗位要求...</div>
-          </div>
-          <div class="btn-group">
-            <button id="btn-back-to-jd2" class="btn btn-secondary">← 返回</button>
-            <button id="btn-start-interview" class="btn btn-success">🎤 开始模拟面试！</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- ═══════════ 屏幕 5: 面试房间 ═══════════ -->
-      <div id="screen-interview-room" class="screen">
-        <div class="card">
-          <div class="card-header">
-            <span class="icon">🎤</span> 模拟面试中
-            <span id="progress-text" style="font-size:0.8rem;color:var(--text-muted);margin-left:auto;"></span>
-          </div>
-          <div class="progress-bar"><div id="progress-fill" class="fill" style="width:0%"></div></div>
-          <div id="chat-box" class="chat-container">
-            <div class="chat-message system">欢迎来到模拟面试！AI 面试官将根据岗位要求和您的简历进行提问，请自然作答——面试官可能会根据您的回答进行追问。</div>
-          </div>
-          <div class="chat-input-area">
-            <textarea id="input-answer" placeholder="输入您的回答...（Enter 发送，Shift+Enter 换行）" rows="2"></textarea>
-          </div>
-          <div class="btn-group">
-            <button id="btn-send-answer" class="btn btn-primary">📨 发送回答</button>
-            <button id="btn-skip-question" class="btn btn-secondary">⏭ 跳过此题</button>
-            <button id="btn-end-interview" class="btn btn-danger" style="margin-left:auto;">⏹ 结束并查看报告</button>
-          </div>
-          <button id="btn-view-report" class="btn btn-success" style="display:none;margin-top:12px;width:100%;">📊 查看完整报告 →</button>
-        </div>
-      </div>
-
-      <!-- ═══════════ 屏幕 6: 面试报告 ═══════════ -->
-      <div id="screen-report" class="screen">
-        <div class="card">
-          <div class="card-header"><span class="icon">📊</span> 面试评估报告</div>
-          <div id="report-content">
-            <div class="loading-overlay"><span class="spinner"></span> 正在生成报告...</div>
-          </div>
-          <div class="btn-group">
-            <button id="btn-view-plan" class="btn btn-primary">📖 查看复习计划</button>
-            <button id="btn-new-session" class="btn btn-secondary">🔄 开始新的面试</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- ═══════════ 屏幕 7: 复习计划 ═══════════ -->
-      <div id="screen-review-plan" class="screen">
-        <div class="card">
-          <div class="card-header"><span class="icon">📖</span> 个性化复习计划</div>
-          <div id="review-plan-content">
-            <div class="loading-overlay"><span class="spinner"></span> 正在加载复习计划...</div>
-          </div>
-          <div class="btn-group">
-            <button id="btn-back-to-report" class="btn btn-secondary">← 返回报告</button>
-            <button id="btn-new-session2" class="btn btn-secondary">🔄 开始新的面试</button>
-          </div>
-        </div>
-      </div>
-
-    </main>
+<!-- History Modal -->
+<div id="history-modal" class="modal" style="display:none">
+  <div class="modal-content" style="width:520px;max-height:70vh;overflow-y:auto">
+    <h3>&#x1F4CA; 历史面试记录</h3>
+    <div id="history-modal-list"></div>
+    <div class="modal-btns" style="margin-top:16px">
+      <button id="btn-history-close" class="btn btn-secondary">关闭</button>
+    </div>
   </div>
+</div>
 
-  <!-- 提示消息 -->
-  <div id="toast" class="toast" style="display:none;"></div>
+<!-- Login Modal -->
+<div id="login-modal" class="modal" style="display:none">
+  <div class="modal-content">
+    <h3 id="login-title">登录</h3>
+    <input id="login-username" placeholder="用户名" autocomplete="username">
+    <input id="login-password" type="password" placeholder="密码" autocomplete="current-password">
+    <div class="modal-btns">
+      <button id="btn-login-submit" class="btn btn-primary">登录</button>
+      <button id="btn-register-submit" class="btn btn-secondary">注册</button>
+      <button id="btn-login-cancel" class="btn btn-secondary">取消</button>
+    </div>
+    <div id="login-msg" class="login-msg"></div>
+    <div class="login-hint">测试账号: demo / demo123</div>
+  </div>
+</div>
 
-  <script src="/web/js/app.js"></script>
+<div id="toast" class="toast" style="display:none"></div>
+
+<script src="/web/js/app.js"></script>
 </body>
 </html>
