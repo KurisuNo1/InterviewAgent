@@ -18,6 +18,37 @@ type CompressedTurn struct {
 	WeakDims   []string `json:"wd"`
 }
 
+// KeyEntities holds critical information extracted from conversation that should
+// survive compression — names, decisions, identifiers that the model must remember.
+type KeyEntities struct {
+	UserName    string   `json:"user_name,omitempty"`
+	OrderIDs    []string `json:"order_ids,omitempty"`
+	Decisions   []string `json:"decisions,omitempty"`
+	Preferences []string `json:"preferences,omitempty"`
+	Topics      []string `json:"topics,omitempty"`
+}
+
+// String formats key entities for injection into the system prompt.
+func (k KeyEntities) String() string {
+	var parts []string
+	if k.UserName != "" {
+		parts = append(parts, "User: "+k.UserName)
+	}
+	if len(k.OrderIDs) > 0 {
+		parts = append(parts, "IDs: "+strings.Join(k.OrderIDs, ", "))
+	}
+	if len(k.Decisions) > 0 {
+		parts = append(parts, "Decisions: "+strings.Join(k.Decisions, "; "))
+	}
+	if len(k.Preferences) > 0 {
+		parts = append(parts, "Preferences: "+strings.Join(k.Preferences, "; "))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "## Key Context\n" + strings.Join(parts, "\n")
+}
+
 // ConversationCompressor reduces conversation history size for LLM context.
 type ConversationCompressor struct {
 	chatModel einomodel.ToolCallingChatModel // used for LLM summarization (strategy C)
@@ -96,7 +127,12 @@ func (c *ConversationCompressor) slidingWindow(turns []turnPair, verbatimCount i
 
 	// Recent turns → verbatim
 	for i := verbatimStart; i < total; i++ {
-		result = append(result, turns[i].User, turns[i].Assistant)
+		if turns[i].User.Role != "" && turns[i].User.Content != "" {
+			result = append(result, turns[i].User)
+		}
+		if turns[i].Assistant.Role != "" && turns[i].Assistant.Content != "" {
+			result = append(result, turns[i].Assistant)
+		}
 	}
 
 	return result
@@ -137,6 +173,107 @@ func (c *ConversationCompressor) summarizeTurns(turns []turnPair) string {
 		return ""
 	}
 	return "Covered topics: " + strings.Join(topics, "; ")
+}
+
+// ExtractKeyEntities scans recent messages for critical information that should
+// survive compression: user names, order IDs, decisions, preferences.
+func (c *ConversationCompressor) ExtractKeyEntities(messages []model.Message) KeyEntities {
+	var entities KeyEntities
+
+	for _, m := range messages {
+		content := strings.ToLower(m.Content)
+
+		// Detect name patterns (simplistic: "我叫X" or "my name is X")
+		if strings.Contains(content, "我叫") || strings.Contains(content, "my name is") ||
+			strings.Contains(content, "我是") || strings.Contains(content, "i'm") || strings.Contains(content, "i am") {
+			entities.UserName = extractNameFromContent(m.Content)
+		}
+
+		// Detect order IDs
+		for _, pattern := range []string{"ord-", "order-", "订单号", "订单"} {
+			if idx := strings.Index(content, pattern); idx >= 0 {
+				rest := m.Content[idx:]
+				if len(rest) > 20 {
+					rest = rest[:20]
+				}
+				rest = strings.TrimSpace(rest)
+				if rest != "" {
+					entities.OrderIDs = append(entities.OrderIDs, rest)
+				}
+			}
+		}
+
+		// Detect decisions (messages containing "决定", "确认", "decided", "confirmed", "选择")
+		for _, kw := range []string{"决定", "确认", "decided", "confirmed", "选择", "choice"} {
+			if strings.Contains(content, kw) && m.Role == model.RoleUser {
+				decision := extractFirstSentence(m.Content)
+				if decision != "" && len(decision) < 150 {
+					entities.Decisions = append(entities.Decisions, decision)
+				}
+				break
+			}
+		}
+
+		// Detect preference statements
+		for _, kw := range []string{"偏好", "喜欢", "想要", "prefer", "preference", "would like"} {
+			if strings.Contains(content, kw) {
+				pref := extractFirstSentence(m.Content)
+				if pref != "" && len(pref) < 150 {
+					entities.Preferences = append(entities.Preferences, pref)
+				}
+				break
+			}
+		}
+
+		// Collect topics from questions
+		if m.Role == model.RoleUser {
+			topic := extractFirstSentence(m.Content)
+			if topic != "" {
+				entities.Topics = append(entities.Topics, topic)
+			}
+		}
+	}
+
+	// Deduplicate
+	entities.OrderIDs = dedupStrings(entities.OrderIDs)
+	entities.Decisions = dedupStrings(entities.Decisions)
+	entities.Preferences = dedupStrings(entities.Preferences)
+	if len(entities.Topics) > 5 {
+		entities.Topics = entities.Topics[len(entities.Topics)-5:]
+	}
+
+	return entities
+}
+
+func extractNameFromContent(content string) string {
+	patterns := []string{"我叫", "我是", "my name is ", "i'm ", "i am "}
+	for _, p := range patterns {
+		idx := strings.Index(strings.ToLower(content), strings.ToLower(p))
+		if idx >= 0 {
+			rest := strings.TrimSpace(content[idx+len(p):])
+			// Take first word or phrase up to punctuation
+			if end := strings.IndexAny(rest, "，,。.!！？? \n"); end > 0 {
+				return rest[:end]
+			}
+			if len(rest) > 30 {
+				rest = rest[:30]
+			}
+			return rest
+		}
+	}
+	return ""
+}
+
+func dedupStrings(slice []string) []string {
+	seen := make(map[string]bool)
+	var result []string
+	for _, s := range slice {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+	return result
 }
 
 // SummarizeWithLLM uses the chat model to produce a concise summary (Strategy C, async).
@@ -192,7 +329,20 @@ func messagesToTurns(messages []model.Message) []turnPair {
 				current.Assistant = *m
 				turns = append(turns, *current)
 				current = nil
+			} else {
+				// Consecutive assistant messages (no preceding user): emit standalone.
+				// This happens in the interview flow where feedback and next question
+				// are both emitted as assistant messages.
+				turns = append(turns, turnPair{Assistant: *m})
 			}
+		default:
+			// System or other role: emit as a standalone message via the User field
+			// so it isn't silently dropped.
+			if current != nil {
+				turns = append(turns, *current)
+				current = nil
+			}
+			turns = append(turns, turnPair{User: *m})
 		}
 	}
 	if current != nil {
@@ -204,10 +354,10 @@ func messagesToTurns(messages []model.Message) []turnPair {
 func turnsToMessages(turns []turnPair) []model.Message {
 	var msgs []model.Message
 	for _, t := range turns {
-		if t.User.Content != "" {
+		if t.User.Content != "" && t.User.Role != "" {
 			msgs = append(msgs, t.User)
 		}
-		if t.Assistant.Content != "" {
+		if t.Assistant.Content != "" && t.Assistant.Role != "" {
 			msgs = append(msgs, t.Assistant)
 		}
 	}

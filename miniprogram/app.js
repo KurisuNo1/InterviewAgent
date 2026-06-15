@@ -1,8 +1,8 @@
 App({
   globalData: {
     token: '',
-    baseURL: 'http://127.0.0.1:8080/api',
-    wsURL: 'ws://127.0.0.1:8080/ws',
+    baseURL: 'http://localhost:8080/api',
+    wsURL: 'ws://localhost:8080/ws',
     chatSessionID: '',
     interviewSessionID: '',
     skillSessionID: '',

@@ -10,6 +10,10 @@ import (
 	"github.com/eino-contrib/jsonschema"
 )
 
+// ResultFilter is an optional callback that trims tool results before they enter the LLM context.
+// It receives the full tool name (server_tool) and raw result, and returns the (possibly trimmed) result.
+type ResultFilter func(toolName string, result string) string
+
 // EinoTool wraps an MCP tool as an Eino InvokableTool so all MCP calls flow
 // through Eino's framework and benefit from unified callbacks and observability.
 type EinoTool struct {
@@ -22,10 +26,13 @@ type EinoTool struct {
 	// callbackHandler is invoked at OnStart/OnEnd/OnError lifecycle points.
 	// Built via observability.NewToolCallbackHandler() using callbacks.NewHandlerBuilder().
 	callbackHandler callbacks.Handler
+
+	// resultFilter is an optional post-processing step for tool results.
+	resultFilter ResultFilter
 }
 
 // NewEinoTool creates an Eino InvokableTool from an MCP ToolDef.
-func NewEinoTool(serverName string, def ToolDef, manager *Manager, handler callbacks.Handler) tool.InvokableTool {
+func NewEinoTool(serverName string, def ToolDef, manager *Manager, handler callbacks.Handler, resultFilter ResultFilter) tool.InvokableTool {
 	return &EinoTool{
 		serverName:      serverName,
 		toolName:        def.Name,
@@ -33,6 +40,7 @@ func NewEinoTool(serverName string, def ToolDef, manager *Manager, handler callb
 		inputSchema:     def.InputSchema,
 		manager:         manager,
 		callbackHandler: handler,
+		resultFilter:    resultFilter,
 	}
 }
 
@@ -90,12 +98,22 @@ func (t *EinoTool) InvokableRun(ctx context.Context, argumentsInJSON string, opt
 		return "", result.Error
 	}
 
+	// Apply result filter before reporting to callbacks
+	response := result.Content
+	fullName := t.serverName + "_" + t.toolName
+	if t.resultFilter != nil {
+		filtered := t.resultFilter(fullName, result.Content)
+		if filtered != result.Content {
+			response = filtered
+		}
+	}
+
 	// --- OnEnd callback ---
 	ctx = t.callbackHandler.OnEnd(ctx, runInfo, &tool.CallbackOutput{
-		Response: result.Content,
+		Response: response,
 	})
 
-	return result.Content, nil
+	return response, nil
 }
 
 // convertToJSONSchema converts an MCP InputSchema (map[string]any in JSON Schema format)

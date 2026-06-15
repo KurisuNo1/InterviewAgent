@@ -15,20 +15,20 @@ import (
 	"github.com/KurisuNo1/InterviewAgent/internal/capability/store"
 	"github.com/KurisuNo1/InterviewAgent/internal/capability/vector"
 
+	openaiembed "github.com/cloudwego/eino-ext/components/embedding/openai"
+	openai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/embedding"
 	"github.com/cloudwego/eino/components/retriever"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/flow/agent/react"
-	openai "github.com/cloudwego/eino-ext/components/model/openai"
-	openaiembed "github.com/cloudwego/eino-ext/components/embedding/openai"
 
 	"github.com/KurisuNo1/InterviewAgent/internal/interaction"
 	"github.com/KurisuNo1/InterviewAgent/internal/interaction/rest"
 	auth2 "github.com/KurisuNo1/InterviewAgent/internal/interaction/rest/auth"
 	"github.com/KurisuNo1/InterviewAgent/internal/interaction/ws"
 	"github.com/KurisuNo1/InterviewAgent/internal/observability"
-	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/agent"
 	"github.com/KurisuNo1/InterviewAgent/internal/orchestration"
+	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/agent"
 	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/contextmanager"
 	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/ingestion"
 	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/interview"
@@ -94,7 +94,7 @@ func Wire(cfg *config.Config) (*App, error) {
 				log.Printf("[wire] WARNING: Embedding init failed (%v)", eErr)
 			} else {
 				embedder = e
-				log.Printf("[wire] Embedding ready (model=%s)", cfg.Embedding.Model)
+				log.Printf("[wire] Embedding ready (model=%s, dimensions=%d)", cfg.Embedding.Model, cfg.Embedding.Dimensions)
 			}
 		} else {
 			log.Printf("[wire] WARNING: Embedding API key not set")
@@ -137,23 +137,38 @@ func Wire(cfg *config.Config) (*App, error) {
 
 	// --- Milvus ---
 	var vectorStore *vector.MilvusStore
-	vectorStore, err = vector.NewMilvusStore(ctx, vector.MilvusConfig{
-		Host:       cfg.VectorDB.Host,
-		Port:       cfg.VectorDB.Port,
-		Username:   cfg.VectorDB.Username,
-		Password:   cfg.VectorDB.Password,
-		Database:   cfg.VectorDB.Database,
-		Collection: cfg.VectorDB.Collection,
-		Dimension:  cfg.VectorDB.Dimension,
-		IndexType:  cfg.VectorDB.IndexType,
-		MetricType: cfg.VectorDB.MetricType,
-	})
-	if err != nil {
+	/* vectorStore, err = vector.NewMilvusStore(ctx, vector.MilvusConfig{ */
+	if cfg.VectorDB.Type == "none" || cfg.VectorDB.Type == "" {
+		log.Printf("[wire] Milvus skipped (type=%s)", cfg.VectorDB.Type)
+		vectorStore = nil
+	} else {
+		milvusCtx, milvusCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer milvusCancel()
+		vectorStore, err = vector.NewMilvusStore(milvusCtx, vector.MilvusConfig{
+			Host:       cfg.VectorDB.Host,
+			Port:       cfg.VectorDB.Port,
+			Username:   cfg.VectorDB.Username,
+			Password:   cfg.VectorDB.Password,
+			Database:   cfg.VectorDB.Database,
+			Collection: cfg.VectorDB.Collection,
+			Dimension:  cfg.VectorDB.Dimension,
+			IndexType:  cfg.VectorDB.IndexType,
+			MetricType: cfg.VectorDB.MetricType,
+		})
+		if err != nil {
+			log.Printf("[wire] WARNING: Milvus init failed (%v)", err)
+			vectorStore = nil
+		} else {
+			log.Printf("[wire] Milvus ready (%s:%d)", cfg.VectorDB.Host, cfg.VectorDB.Port)
+		}
+	}
+
+	/* if err != nil {
 		log.Printf("[wire] WARNING: Milvus init failed (%v)", err)
 		vectorStore = nil
 	} else {
 		log.Printf("[wire] Milvus ready (%s:%d)", cfg.VectorDB.Host, cfg.VectorDB.Port)
-	}
+	} */
 
 	// --- Bleve (with timeout — BoltDB lock can block indefinitely) ---
 	log.Printf("[wire] Starting Bleve index (timeout 10s)...")
@@ -178,6 +193,12 @@ func Wire(cfg *config.Config) (*App, error) {
 		bleveIndex = nil
 	}
 
+	// --- Tool Result Filter (must be created before MCP bridge) ---
+	toolResultFilter := contextmanager.NewToolResultFilter(contextmanager.DefaultToolMetas())
+	mcpResultFilter := mcp.ResultFilter(func(toolName string, result string) string {
+		return toolResultFilter.Filter(toolName, result)
+	})
+
 	// --- MCP ---
 	var mcpManager *mcp.Manager
 	var mcpBridge *mcp.EinoBridge
@@ -199,7 +220,7 @@ func Wire(cfg *config.Config) (*App, error) {
 			log.Printf("[wire] WARNING: MCP start failed (%v) — continuing without MCP tools", err)
 			mcpManager = nil
 		} else {
-			mcpBridge = mcp.NewEinoBridge(ctx, mcpManager, observability.NewToolCallbackHandler())
+			mcpBridge = mcp.NewEinoBridge(ctx, mcpManager, observability.NewToolCallbackHandler(), mcpResultFilter)
 			githubMCP = mcp.NewGitHubMCP(mcpBridge)
 			webSearchMCP = mcp.NewWebSearchMCP(mcpBridge)
 			log.Printf("[wire] MCP bridge ready (%d servers)", len(cfg.MCP.Servers))
@@ -222,9 +243,11 @@ func Wire(cfg *config.Config) (*App, error) {
 
 	// --- Context Manager ---
 	conversationCompressor := contextmanager.NewConversationCompressor(chatModel)
-	ctxBuilder := contextmanager.NewContextBuilder(&cfg.Context, conversationCompressor)
+	ctxMonitor := contextmanager.NewDefaultMonitor("data/context_stats.json")
+	ctxBuilder := contextmanager.NewContextBuilder(&cfg.Context, conversationCompressor, ctxMonitor)
 	memHierarchy := contextmanager.NewMemoryHierarchy(memoryManager, conversationCompressor)
-	log.Printf("[wire] ContextBuilder + MemoryHierarchy ready")
+	overflowHandler := contextmanager.NewOverflowHandler(chatModel)
+	log.Printf("[wire] ContextBuilder + MemoryHierarchy + ContextMonitor + OverflowHandler ready")
 
 	// --- Hybrid RAG Retriever ---
 	var hybridRetriever retriever.Retriever
@@ -261,26 +284,26 @@ func Wire(cfg *config.Config) (*App, error) {
 	// --- ReAct Agents ---
 	var casualAgent, interviewerAgent, evalAgent, reviewAgent *react.Agent
 	if agentFactory != nil {
-		casualAgent, err = agentFactory.NewAgent(ctx, "casual_chat", nil, 10)
+		casualAgent, err = agentFactory.NewAgent(ctx, "casual_chat", nil, 3)
 		if err != nil {
 			log.Printf("[wire] WARNING: casual agent failed (%v)", err)
 		}
-		interviewerAgent, err = agentFactory.NewAgent(ctx, "interviewer", nil, 8)
+		interviewerAgent, err = agentFactory.NewAgent(ctx, "interviewer", nil, 3)
 		if err != nil {
 			log.Printf("[wire] WARNING: interviewer agent failed (%v)", err)
 		}
-		evalAgent, err = agentFactory.NewAgent(ctx, "evaluator", []string{"web_search"}, 5)
+		evalAgent, err = agentFactory.NewAgent(ctx, "evaluator", []string{"web_search"}, 3)
 		if err != nil {
 			log.Printf("[wire] WARNING: evaluator agent failed (%v)", err)
 		}
-		reviewAgent, err = agentFactory.NewAgent(ctx, "review_planner", []string{"web_search", "github_search"}, 8)
+		reviewAgent, err = agentFactory.NewAgent(ctx, "review_planner", []string{"web_search", "github_search"}, 3)
 		if err != nil {
 			log.Printf("[wire] WARNING: review planner agent failed (%v)", err)
 		}
 	}
 
 	// --- Intent Router ---
-	host := router.NewHost(chatModel, hybridRetriever, embedder)
+	host := router.NewHost(chatModel, hybridRetriever, embedder, ctxMonitor)
 	host.Register(router.IntentCasualChat, router.NewCasualChatSpecialist(casualAgent, chatModel, ctxBuilder))
 	log.Printf("[wire] Intent router ready")
 
@@ -327,12 +350,12 @@ func Wire(cfg *config.Config) (*App, error) {
 	evalNode := interviewNodes.NewEvaluationNode(chatModel, evalAgent, ctxBuilder)
 	reviewNode := interviewNodes.NewReviewPlanningNode(chatModel, githubMCP, webSearchMCP, reviewAgent)
 	nodeSet := &interview.NodeSet{
-		JDAnalysis:      jdNode,
-		ResumeMatching:  resumeNode,
+		JDAnalysis:       jdNode,
+		ResumeMatching:   resumeNode,
 		QuestionPlanning: questionNode,
-		Interviewer:     interviewerNode,
-		Evaluation:      evalNode,
-		ReviewPlanning:  reviewNode,
+		Interviewer:      interviewerNode,
+		Evaluation:       evalNode,
+		ReviewPlanning:   reviewNode,
 	}
 	compiledGraph, err := interview.CompileSetupGraph(ctx, nodeSet)
 	if err != nil {
@@ -344,7 +367,7 @@ func Wire(cfg *config.Config) (*App, error) {
 
 	// --- Orchestrator ---
 	orchestrator := orchestration.NewOrchestrator(host, runner, skillRegistry, memoryManager, docIngestor,
-		chatModel, hybridRetriever, embedder, githubMCP, webSearchMCP, mcpBridge, casualAgent, ctxBuilder, memHierarchy)
+		chatModel, hybridRetriever, embedder, githubMCP, webSearchMCP, mcpBridge, casualAgent, ctxBuilder, memHierarchy, overflowHandler, ctxMonitor)
 	log.Printf("[wire] Orchestrator ready")
 
 	// Layer 1: Interaction

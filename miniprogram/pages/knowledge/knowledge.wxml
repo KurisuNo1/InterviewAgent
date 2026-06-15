@@ -16,7 +16,10 @@
   </view>
 
   <view class="doc-section">
-    <text class="doc-section-title">已上传文档</text>
+    <view class="doc-section-header">
+      <text class="doc-section-title">已上传文档</text>
+      <button class="btn-sm" bindtap="loadDocs">刷新</button>
+    </view>
     <view wx:if="{{loading}}" class="loading-text">加载中...</view>
     <view wx:elif="{{documents.length===0}}" class="kb-empty">
       <text class="kb-empty-icon">空的</text>

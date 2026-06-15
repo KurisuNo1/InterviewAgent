@@ -88,6 +88,7 @@ func (s *KnowledgeExplainSkill) Handle(ctx context.Context, state *SkillState, i
 	var msgs []*schema.Message
 	if s.ctxBuilder != nil {
 		msgs = s.ctxBuilder.Build(contextmanager.BuildParams{
+			SessionID:    state.SessionID,
 			ProfileName:  "skill",
 			SystemPrompt: prompt,
 			RAGDocuments: ragDocs,

@@ -3,7 +3,7 @@ const api = require('../../utils/api')
 const app = getApp()
 
 Page({
-  data: { documents: [], loading: true },
+  data: { documents: [], loading: false },
 
   onLoad() { this.loadDocs() },
 

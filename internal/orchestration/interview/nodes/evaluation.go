@@ -43,10 +43,9 @@ func (n *EvaluationNode) Execute(ctx context.Context, state *InterviewState) err
 	// Build follow-up exchange context
 	followUps := extractFollowUps(state.ChatHistory)
 
-	// If agent is available, let it search for reference information to aid evaluation
-	if n.agent != nil {
-		n.enrichWithSearch(ctx, state, answer)
-	}
+	// Skip agent-based search during evaluation — it adds 30-70s latency
+	// per web search round. Reference enrichment is best-effort and not
+	// worth the delay during interview scoring.
 
 	var (
 		resp *schema.Message
@@ -60,6 +59,7 @@ func (n *EvaluationNode) Execute(ctx context.Context, state *InterviewState) err
 			}
 		}
 		msgs := n.ctxBuilder.Build(contextmanager.BuildParams{
+			SessionID:    state.SessionID,
 			ProfileName: "interview_eval",
 			SystemPrompt: safeFmt(prompts.EvaluationSystemPrompt,
 				state.CurrentQuestion.Content,
@@ -104,11 +104,8 @@ func (n *EvaluationNode) Execute(ctx context.Context, state *InterviewState) err
 	return nil
 }
 
-// callLLM routes through the ReAct Agent if available, otherwise falls back to direct LLM.
+// callLLM uses direct LLM (not agent) for evaluation to keep latency predictable.
 func (n *EvaluationNode) callLLM(ctx context.Context, msgs []*schema.Message) (*schema.Message, error) {
-	if n.agent != nil {
-		return n.agent.Generate(ctx, msgs)
-	}
 	return n.chatModel.Generate(ctx, msgs)
 }
 

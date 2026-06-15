@@ -1,5 +1,5 @@
 server:
-  host: "0.0.0.0"
+  host: "localhost"
   port: 8080
   ws_path: "/ws"
   read_timeout: 30s
@@ -103,8 +103,8 @@ interview:
 rag:
   vector_weight: 0.7
   keyword_weight: 0.3
-  top_k: 10
-  final_top_k: 5
+  top_k: 3
+  final_top_k: 3
 
 memory:
   short_term:
@@ -115,6 +115,8 @@ memory:
 
 context:
   max_tokens: 32768
+  warning_threshold: 0.80
+  critical_threshold: 0.95
   profiles:
     casual_chat:
       system_max: 1024

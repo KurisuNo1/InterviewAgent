@@ -30,13 +30,14 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 .history-empty{padding:8px 12px;font-size:.8rem;color:var(--text-muted);font-style:italic}
 .sidebar-footer{padding:12px;border-top:1px solid var(--border)}
 .user-info{display:flex;align-items:center;justify-content:space-between;font-size:.85rem;margin-bottom:8px}
-.sidebar-tools{font-size:.75rem}
-.tools-header{cursor:pointer;color:var(--accent);padding:4px 0}
-.tools-list{color:var(--text-muted);padding-left:8px;margin-top:4px}
 .mode-content{display:none;flex-direction:column;height:100%}
 .mode-content.active{display:flex}
 .chat-header{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--bg-secondary);border-bottom:1px solid var(--border);min-height:48px}
 .chat-title{font-weight:600;font-size:1rem;flex:1}
+
+/* ===== Chat Layout ===== */
+.chat-layout{display:flex;flex:1;overflow:hidden}
+.chat-main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
 .chat-box{flex:1;overflow-y:auto;padding:16px}
 .chat-input-area{display:flex;gap:8px;padding:12px 16px;background:var(--bg-secondary);border-top:1px solid var(--border)}
 .chat-input-area textarea{flex:1;padding:12px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:8px;resize:none;font-family:var(--font);font-size:.95rem;outline:none;max-height:120px}
@@ -60,6 +61,7 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 .msg-content pre code{background:none;padding:0}
 .typing .msg-avatar{animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
 /* ===== Interview Progress ===== */
 .interview-progress{display:flex;align-items:center;gap:0;padding:10px 20px;background:var(--bg-secondary);border-bottom:1px solid var(--border)}
 .progress-step{display:flex;align-items:center;gap:6px;font-size:.8rem;color:var(--text-muted);cursor:default;flex-shrink:0}
@@ -69,18 +71,21 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 .progress-step.done .step-label{color:var(--accent)}
 .progress-line{flex:1;height:2px;background:var(--border);min-width:16px;margin:0 4px;transition:background .3s}
 .progress-line.done{background:var(--accent)}
+
 /* ===== Interview Layout ===== */
 .interview-layout{display:flex;flex:1;overflow:hidden}
 .interview-main{flex:1;overflow-y:auto;padding:20px}
-.interview-sidebar{width:280px;min-width:280px;background:var(--bg-secondary);border-left:1px solid var(--border);overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
-.sidebar-panel{background:var(--bg-tertiary);border-radius:8px;padding:12px}
-.sidebar-panel h4{font-size:.85rem;margin-bottom:10px;color:var(--text-secondary)}
+.interview-sidebar{width:280px;min-width:280px;background:var(--bg-secondary);border-left:1px solid var(--border);overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px}
+.sidebar-panel{background:var(--bg-tertiary);border-radius:10px;padding:14px;border:1px solid var(--border)}
+.sidebar-panel h4{font-size:.82rem;margin-bottom:10px;color:var(--text-secondary);display:flex;align-items:center;gap:6px}
+
 /* ===== Interview Cards ===== */
 .interview-content,.skills-content,.knowledge-content{flex:1;overflow-y:auto;padding:16px}
 .iv-card{background:var(--bg-secondary);border-radius:var(--radius);padding:24px;margin-bottom:16px;border:1px solid var(--border)}
 .iv-card h3{font-size:1.15rem;margin-bottom:16px;display:flex;align-items:center;gap:8px}
 .iv-card textarea{width:100%;min-height:120px;padding:12px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);border-radius:8px;font-family:var(--font);font-size:.9rem;resize:vertical}
 .iv-card input[type="file"]{color:var(--text-secondary);margin:8px 0}
+
 /* ===== Result Display ===== */
 .result-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:16px}
 .result-item{background:var(--bg-primary);padding:14px;border-radius:8px;text-align:center}
@@ -89,8 +94,9 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 .tag-list{display:flex;flex-wrap:wrap;gap:6px}
 .tag{display:inline-block;padding:3px 10px;border-radius:12px;font-size:.8rem;background:var(--bg-tertiary);color:var(--text-secondary);border:1px solid var(--border)}
 .tag.highlight{background:rgba(25,195,125,0.15);border-color:var(--accent);color:var(--accent)}
+
 /* ===== Interview Chat ===== */
-.iv-chat-box{background:var(--bg-primary);border-radius:12px;padding:20px;min-height:320px;max-height:460px;overflow-y:auto;margin-bottom:16px;border:1px solid var(--border);display:flex;flex-direction:column;gap:12px}
+.iv-chat-box{background:var(--bg-primary);border-radius:12px;padding:20px;min-height:320px;max-height:460px;overflow-y:auto;margin-bottom:12px;border:1px solid var(--border);display:flex;flex-direction:column;gap:12px}
 .iv-chat-box .msg{max-width:92%;animation:msgIn .25s ease-out}
 @keyframes msgIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 .iv-chat-box .msg.assistant{align-self:flex-start}
@@ -99,6 +105,7 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 .iv-chat-box .msg.user{align-self:flex-end;flex-direction:row-reverse}
 .iv-chat-box .msg.user .msg-content{background:var(--accent);color:#fff;border-bottom-right-radius:4px;padding:12px 16px;font-size:.9rem;line-height:1.55}
 .iv-chat-box .msg.user .msg-avatar{background:#5a4fcf;color:#fff}
+
 /* Interview header bar */
 .iv-header{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--bg-secondary);border-radius:10px;margin-bottom:12px;border:1px solid var(--border);flex-wrap:wrap}
 .iv-header .iv-q-counter{font-size:.85rem;font-weight:600;color:var(--accent);white-space:nowrap}
@@ -109,20 +116,22 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 .iv-header .iv-position{font-size:.8rem;color:var(--text-muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .iv-header .iv-progress-mini{width:60px;height:4px;border-radius:2px;background:var(--bg-primary);overflow:hidden;flex-shrink:0}
 .iv-header .iv-progress-mini-fill{height:100%;border-radius:2px;background:var(--accent);transition:width .4s}
-/* Interview input area */
-.iv-input-area{display:flex;gap:10px;align-items:flex-end}
-.iv-input-area textarea{flex:1;padding:12px 16px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:10px;resize:none;font-family:var(--font);font-size:.9rem;outline:none;transition:border .2s;line-height:1.5}
-.iv-input-area textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(25,195,125,0.1)}
-.iv-input-area .btn-send{height:42px;width:42px}
-.iv-input-area .btn-secondary{padding:10px 14px;font-size:.82rem}
+
+/* Interview input area — compact */
+.iv-input-area{display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--bg-secondary);border-top:1px solid var(--border)}
+.iv-input-area textarea{flex:1;padding:10px 14px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:8px;resize:none;font-family:var(--font);font-size:.88rem;outline:none;transition:border .2s;line-height:1.4;max-height:80px}
+.iv-input-area textarea:focus{border-color:var(--accent)}
+.iv-input-area .btn-send{height:38px;width:38px;font-size:1rem}
+.iv-input-area .btn-secondary{padding:8px 12px;font-size:.78rem;white-space:nowrap}
+
 /* Interview sidebar panels */
 .interview-sidebar{width:280px;min-width:280px;background:var(--bg-secondary);border-left:1px solid var(--border);overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px}
-.sidebar-panel{background:var(--bg-tertiary);border-radius:10px;padding:14px;border:1px solid var(--border)}
-.sidebar-panel h4{font-size:.82rem;margin-bottom:10px;color:var(--text-secondary);display:flex;align-items:center;gap:6px}
+
 /* Empty state in chat box */
 .iv-chat-box .iv-empty{text-align:center;padding:40px 20px;color:var(--text-muted)}
 .iv-chat-box .iv-empty .iv-empty-icon{font-size:2.5rem;margin-bottom:12px}
 .iv-chat-box .iv-empty p{font-size:.85rem;line-height:1.6}
+
 /* ===== Score Display ===== */
 .score-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;font-weight:700;font-size:1.1rem}
 .score-high{background:rgba(25,195,125,0.2);color:var(--accent)}
@@ -133,19 +142,21 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 .dim-bar .dim-track{height:6px;border-radius:3px;background:var(--bg-primary);overflow:hidden}
 .dim-bar .dim-fill{height:100%;border-radius:3px;transition:width .5s}
 .dim-fill.high{background:var(--accent)}.dim-fill.mid{background:#eab308}.dim-fill.low{background:var(--danger)}
+
 /* ===== History Items ===== */
 .hist-entry{padding:10px 12px;background:var(--bg-primary);border-radius:6px;margin-bottom:8px;cursor:pointer;font-size:.82rem;border:1px solid transparent;transition:border .2s}
 .hist-entry:hover{border-color:var(--accent)}
 .hist-entry .hist-date{color:var(--text-muted);font-size:.7rem;margin-top:2px}
 .hist-entry .hist-score{font-weight:700;color:var(--accent)}
 .hist-entry .hist-preview{font-size:.78rem;color:var(--text-secondary);line-height:1.35;margin:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
 /* ===== Modal History ===== */
 .hist-preview-text{font-size:.8rem;color:var(--text-secondary);margin-top:6px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-/* ===== Modal History ===== */
 .hist-card{background:var(--bg-primary);padding:14px;border-radius:8px;margin-bottom:10px;cursor:pointer;border:1px solid var(--border);transition:border .2s}
 .hist-card:hover{border-color:var(--accent)}
 .hist-card .hist-meta{display:flex;justify-content:space-between;align-items:center}
 .hist-card .hist-score-big{font-size:1.5rem;font-weight:700}
+
 /* ===== Section Dividers ===== */
 .iv-section{margin-top:20px;padding-top:16px;border-top:1px solid var(--border)}
 .iv-section h4{font-size:.95rem;margin-bottom:10px;color:var(--text-secondary)}
@@ -166,6 +177,7 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 .toast{position:fixed;top:20px;right:20px;padding:12px 20px;border-radius:6px;color:#fff;z-index:2000;font-size:.9rem;max-width:400px;animation:slideIn .3s}
 @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
 .toast.success{background:#16a34a}.toast.error{background:var(--danger)}.toast.info{background:#2563eb}
+
 /* ===== Skills Page ===== */
 .skills-hero{text-align:center;padding:32px 20px 24px}
 .skills-hero h2{font-size:1.5rem;margin-bottom:8px;color:var(--text-primary)}
@@ -182,8 +194,51 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 .skill-arrow{color:var(--text-muted);font-size:1.1rem;flex-shrink:0;transition:transform .2s,color .2s}
 .skill-card:hover .skill-arrow{transform:translateX(3px);color:var(--accent)}
 .doc-item{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--bg-secondary);border-radius:6px;margin-bottom:8px}
+.doc-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;margin-right:12px;font-size:.88rem}
+.knowledge-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.btn-danger-sm{padding:4px 10px;font-size:.8rem;border-radius:4px;background:transparent;color:var(--danger);border:1px solid var(--danger);cursor:pointer}
+.btn-danger-sm:hover{background:var(--danger);color:#fff}
 .upload-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:40px;text-align:center;cursor:pointer;color:var(--text-muted);margin-bottom:16px}
 .upload-zone:hover{border-color:var(--accent);color:var(--accent)}
 .msg .btn{margin-top:8px} .msg .btn+.btn{margin-left:8px}
 .spin{display:inline-block;animation:spin 1s linear infinite} @keyframes spin{to{transform:rotate(360deg)}}
-@media(max-width:768px){#sidebar{width:0;min-width:0}#sidebar.collapsed{width:260px;min-width:260px}.msg{max-width:95%}.skills-grid{grid-template-columns:1fr}.skills-hero h2{font-size:1.25rem}}
+
+/* ===== Debug Popup (ChatGPT-style, near ⚡ button) ===== */
+.btn-debug-wrap{position:relative;flex-shrink:0}
+.btn-debug{background:transparent;border:1px solid var(--border);color:var(--text-muted)}
+.btn-debug:hover,.btn-debug.active{color:var(--accent);border-color:var(--accent)}
+.debug-popup{width:320px;max-height:420px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.4);overflow-y:auto;z-index:1000;animation:popupIn .15s ease-out}
+@keyframes popupIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.debug-popup-menu{display:flex;flex-direction:column;padding:8px}
+.debug-popup-btn{display:flex;align-items:center;gap:10px;width:100%;padding:12px 14px;background:transparent;border:none;border-radius:8px;color:var(--text-primary);font-size:.85rem;cursor:pointer;text-align:left;transition:background .15s}
+.debug-popup-btn:hover{background:var(--bg-tertiary)}
+.debug-popup-btn .icon{font-size:1.1rem}
+.debug-popup-body{padding:14px}
+.debug-popup-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-weight:600;font-size:.82rem;color:var(--text-primary)}
+.debug-popup-back{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:.8rem;padding:2px 6px;border-radius:4px}
+.debug-popup-back:hover{color:var(--accent);background:var(--bg-tertiary)}
+.debug-loading{color:var(--text-muted);font-size:.75rem}
+.debug-usage-bar{height:6px;border-radius:3px;background:var(--bg-primary);margin:8px 0;overflow:hidden}
+.debug-usage-bar-fill{height:100%;border-radius:3px;transition:width .4s,background .4s}
+.debug-usage-fill-safe{background:var(--accent)}
+.debug-usage-fill-warn{background:#f59e0b}
+.debug-usage-fill-danger{background:var(--danger)}
+.debug-usage-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
+.debug-usage-item{background:var(--bg-primary);border-radius:6px;padding:8px 10px;text-align:center}
+.debug-usage-item .val{font-size:.9rem;font-weight:700;color:var(--text-primary)}
+.debug-usage-item .lbl{font-size:.65rem;color:var(--text-muted);margin-top:2px}
+.debug-tool-item{padding:4px 0;color:var(--text-secondary);font-size:.75rem;border-bottom:1px solid rgba(255,255,255,.04);line-height:1.35}
+.debug-tool-item:last-child{border-bottom:none}
+.debug-tool-item b{color:var(--accent);font-weight:600}
+/* Popup upload zone */
+.popup-upload-zone{border:2px dashed var(--border);border-radius:10px;padding:24px 16px;text-align:center;cursor:pointer;color:var(--text-muted);transition:all .2s;margin:8px 0}
+.popup-upload-zone:hover,.popup-upload-zone-active{border-color:var(--accent);color:var(--accent);background:rgba(25,195,125,0.05)}
+.popup-upload-icon{font-size:2rem;margin-bottom:8px}
+.popup-upload-zone p{font-size:.8rem;margin:0;line-height:1.5}
+
+@media(max-width:768px){
+  #sidebar{width:0;min-width:0}#sidebar.collapsed{width:260px;min-width:260px}
+  .msg{max-width:95%}.skills-grid{grid-template-columns:1fr}.skills-hero h2{font-size:1.25rem}
+  .debug-popup{width:280px;max-height:360px}
+  .interview-sidebar{width:220px;min-width:220px}
+}

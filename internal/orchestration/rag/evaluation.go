@@ -21,14 +21,14 @@ const (
 
 // EvalResult holds the results of a single RAG evaluation run.
 type EvalResult struct {
-	Query          string             `json:"query"`
-	RetrievedDocs  []string           `json:"retrieved_docs"`
-	Faithfulness   float64            `json:"faithfulness"`
-	Relevance      float64            `json:"relevance"`
-	Completeness   float64            `json:"completeness"`
-	OverallScore   float64            `json:"overall_score"`
-	PerDocScores   []DocEvalScore     `json:"per_doc_scores,omitempty"`
-	LLMExplanation string             `json:"llm_explanation,omitempty"`
+	Query          string         `json:"query"`
+	RetrievedDocs  []string       `json:"retrieved_docs"`
+	Faithfulness   float64        `json:"faithfulness"`
+	Relevance      float64        `json:"relevance"`
+	Completeness   float64        `json:"completeness"`
+	OverallScore   float64        `json:"overall_score"`
+	PerDocScores   []DocEvalScore `json:"per_doc_scores,omitempty"`
+	LLMExplanation string         `json:"llm_explanation,omitempty"`
 }
 
 // DocEvalScore holds per-document evaluation scores.
@@ -41,8 +41,8 @@ type DocEvalScore struct {
 // TopKExperiment holds results for different TopK values.
 type TopKExperiment struct {
 	Results map[int][]EvalResult `json:"results"`
-	BestK   int                   `json:"best_k"`
-	Summary string                `json:"summary"`
+	BestK   int                  `json:"best_k"`
+	Summary string               `json:"summary"`
 }
 
 // RAGEvaluator evaluates RAG retrieval quality using LLM-based metrics.
@@ -212,9 +212,9 @@ func parseEvalResponse(response string) (*EvalResult, error) {
 
 // OfflineEvalConfig configures an offline RAG evaluation run.
 type OfflineEvalConfig struct {
-	TopKValues []int
+	TopKValues  []int
 	TestQueries []TestQuery
-	OutputPath string
+	OutputPath  string
 }
 
 // TestQuery is a single test case for RAG evaluation.

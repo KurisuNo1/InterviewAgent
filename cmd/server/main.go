@@ -36,11 +36,16 @@ func main() {
 	// Set up HTTP routes
 	mux := http.NewServeMux()
 
-	// Static web frontend
+	// Static web frontend (no-cache for dev)
 	webFS := http.FileServer(http.Dir("web"))
-	mux.Handle("/web/", http.StripPrefix("/web/", webFS))
+	noCacheFS := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		webFS.ServeHTTP(w, r)
+	})
+	mux.Handle("/web/", http.StripPrefix("/web/", noCacheFS))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 			http.ServeFile(w, r, "web/index.html")
 			return
 		}
@@ -73,10 +78,11 @@ func main() {
 		fmt.Printf("╔══════════════════════════════════════════╗\n")
 		fmt.Printf("║   InterviewAgent Server                  ║\n")
 		fmt.Printf("╠══════════════════════════════════════════╣\n")
-		fmt.Printf("║  REST API:  http://%s/api       ║\n", addr)
-		fmt.Printf("║  WebSocket: ws://%s%s             ║\n", addr, cfg.Server.WSPath)
-		fmt.Printf("║  Health:    http://%s/health        ║\n", addr)
+		fmt.Printf("║  REST API:  http://%s/api    ║\n", addr)
+		fmt.Printf("║  WebSocket: ws://%s%s       ║\n", addr, cfg.Server.WSPath)
+		fmt.Printf("║  Health:    http://%s/health ║\n", addr)
 		fmt.Printf("║  LLM:       %-28s ║\n", cfg.LLM.Model)
+		fmt.Printf("║  Web     :  http://%s        ║\n", addr)
 		fmt.Printf("╚══════════════════════════════════════════╝\n")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %v", err)

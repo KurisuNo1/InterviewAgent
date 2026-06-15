@@ -50,6 +50,7 @@ func NewRouter(svc interaction.InterviewService, jwtManager *auth.JWTManager, us
 		api.POST("/sessions/:id/message", h.HandleMessage)
 		api.POST("/sessions/:id/stream", h.StreamMessage)
 		api.GET("/sessions/:id/messages", h.GetMessages)
+		api.GET("/sessions/:id/context/stats", h.GetSessionContextStats)
 	}
 
 	api.GET("/sessions", h.ListSessions)
@@ -59,6 +60,8 @@ func NewRouter(svc interaction.InterviewService, jwtManager *auth.JWTManager, us
 	api.POST("/documents/upload", h.UploadDocuments)
 	api.GET("/documents", h.ListDocuments)
 	api.DELETE("/documents/:id", h.DeleteDocument)
+
+	api.GET("/context/stats", h.GetContextStats)
 
 	return r
 }

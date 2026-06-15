@@ -236,17 +236,17 @@ func (m *MilvusStore) Insert(ctx context.Context, docs []*schema.Document) error
 	return m.client.Flush(ctx, m.cfg.Collection, false)
 }
 
-// Delete removes documents from Milvus by ID using an expression.
-func (m *MilvusStore) Delete(ctx context.Context, ids []string) error {
-	if len(ids) == 0 {
+// Delete removes documents from Milvus by source_file using an expression.
+func (m *MilvusStore) Delete(ctx context.Context, sourceFiles []string) error {
+	if len(sourceFiles) == 0 {
 		return nil
 	}
-	expr := "id in ["
-	for i, id := range ids {
+	expr := "source_file in ["
+	for i, sf := range sourceFiles {
 		if i > 0 {
 			expr += ", "
 		}
-		expr += fmt.Sprintf(`"%s"`, id)
+		expr += fmt.Sprintf(`"%s"`, sf)
 	}
 	expr += "]"
 	return m.client.Delete(ctx, m.cfg.Collection, "", expr)

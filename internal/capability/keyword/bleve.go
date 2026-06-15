@@ -127,9 +127,24 @@ func (b *BleveIndex) ListAll(ctx context.Context) ([]*schema.Document, error) {
 	return docs, nil
 }
 
-// Delete removes a document from the index by ID.
-func (b *BleveIndex) Delete(ctx context.Context, id string) error {
-	return b.index.Delete(id)
+// Delete removes all documents matching the given source_file from the index.
+func (b *BleveIndex) Delete(ctx context.Context, sourceFile string) error {
+	q := bleve.NewMatchQuery(sourceFile)
+	q.SetField("source_file")
+	searchReq := bleve.NewSearchRequest(q)
+	searchReq.Size = 10000
+	searchReq.Fields = []string{"source_file"}
+
+	result, err := b.index.Search(searchReq)
+	if err != nil {
+		return fmt.Errorf("search for delete failed: %w", err)
+	}
+	for _, hit := range result.Hits {
+		if err := b.index.Delete(hit.ID); err != nil {
+			return fmt.Errorf("delete %s failed: %w", hit.ID, err)
+		}
+	}
+	return nil
 }
 
 // Retrieve implements retriever.Retriever for Eino integration.

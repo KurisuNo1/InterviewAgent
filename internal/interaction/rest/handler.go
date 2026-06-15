@@ -3,6 +3,7 @@ package rest
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/KurisuNo1/InterviewAgent/internal/interaction"
 	"github.com/KurisuNo1/InterviewAgent/internal/interaction/rest/auth"
@@ -113,7 +114,15 @@ func (h *Handler) StartInterview(c *gin.Context) {
 	sessionID := c.Param("id")
 	event, err := h.svc.StartInterview(c.Request.Context(), sessionID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, APIResponse{Code: 500, Message: err.Error()})
+		msg := err.Error()
+		if strings.Contains(msg, "not found") {
+			c.JSON(http.StatusNotFound, APIResponse{Code: 404, Message: msg})
+		} else if strings.Contains(msg, "all questions have been asked") {
+			// Interview is effectively complete — guide the frontend to the report
+			c.JSON(http.StatusGone, APIResponse{Code: 410, Message: "interview already completed, fetch the report"})
+		} else {
+			c.JSON(http.StatusInternalServerError, APIResponse{Code: 500, Message: msg})
+		}
 		return
 	}
 	c.JSON(http.StatusOK, APIResponse{Code: 200, Message: "ok", Data: event})
@@ -197,7 +206,11 @@ func (h *Handler) GetReport(c *gin.Context) {
 	sessionID := c.Param("id")
 	report, err := h.svc.GetReport(c.Request.Context(), sessionID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, APIResponse{Code: 500, Message: err.Error()})
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, APIResponse{Code: 404, Message: err.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, APIResponse{Code: 500, Message: err.Error()})
+		}
 		return
 	}
 	c.JSON(http.StatusOK, APIResponse{Code: 200, Message: "ok", Data: report})
@@ -219,7 +232,12 @@ func (h *Handler) GetReviewPlan(c *gin.Context) {
 	sessionID := c.Param("id")
 	plan, err := h.svc.GetReviewPlan(c.Request.Context(), sessionID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, APIResponse{Code: 500, Message: err.Error()})
+		// Return 404 for not-found (plan not generated yet), 500 for real errors
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, APIResponse{Code: 404, Message: err.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, APIResponse{Code: 500, Message: err.Error()})
+		}
 		return
 	}
 	c.JSON(http.StatusOK, APIResponse{Code: 200, Message: "ok", Data: plan})
@@ -230,7 +248,11 @@ func (h *Handler) ResumeSession(c *gin.Context) {
 	sessionID := c.Param("id")
 	session, err := h.svc.ResumeSession(c.Request.Context(), sessionID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, APIResponse{Code: 500, Message: err.Error()})
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "failed to resume") {
+			c.JSON(http.StatusNotFound, APIResponse{Code: 404, Message: err.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, APIResponse{Code: 500, Message: err.Error()})
+		}
 		return
 	}
 	c.JSON(http.StatusOK, APIResponse{Code: 200, Message: "ok", Data: session})
@@ -390,4 +412,25 @@ func (h *Handler) DeleteDocument(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, APIResponse{Code: 200, Message: "deleted"})
+}
+
+// GetContextStats handles GET /api/context/stats
+func (h *Handler) GetContextStats(c *gin.Context) {
+	stats, err := h.svc.GetContextStats(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, APIResponse{Code: 200, Message: "ok", Data: stats})
+}
+
+// GetSessionContextStats handles GET /api/sessions/:id/context/stats
+func (h *Handler) GetSessionContextStats(c *gin.Context) {
+	sessionID := c.Param("id")
+	stats, err := h.svc.GetSessionContextStats(c.Request.Context(), sessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, APIResponse{Code: 200, Message: "ok", Data: stats})
 }

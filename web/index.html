@@ -32,10 +32,6 @@
         <span id="username-display">未登录</span>
         <button id="btn-login" class="btn-sm">登录</button>
       </div>
-      <div id="available-tools-sidebar" class="sidebar-tools" style="display:none">
-        <div class="tools-header" id="tools-toggle-sidebar">&#x1F6E0; 可用工具 (<span id="tools-count-sidebar">0</span>)</div>
-        <div id="tools-list-sidebar" class="tools-list" style="display:none"></div>
-      </div>
     </div>
   </aside>
 
@@ -48,24 +44,30 @@
         <span class="chat-title" id="chat-title">AI 闲聊</span>
         <button id="btn-clear-chat" class="btn-sm">清空</button>
       </div>
-      <div id="chat-box" class="chat-box">
-        <div class="welcome-msg">
-          <h2>InterviewAgent</h2>
-          <p>我是你的 AI 面试助手。可以闲聊、模拟面试、练习技能。试试问我问题吧！</p>
+      <div class="chat-layout">
+        <div class="chat-main">
+          <div id="chat-box" class="chat-box">
+            <div class="welcome-msg">
+              <h2>InterviewAgent</h2>
+              <p>我是你的 AI 面试助手。可以闲聊、模拟面试、练习技能。试试问我问题吧！</p>
+            </div>
+          </div>
+          <div id="chat-input-area" class="chat-input-area">
+            <textarea id="input-msg" placeholder="输入消息...（Enter 发送，Shift+Enter 换行）" rows="1"></textarea>
+            <button id="btn-send" class="btn-send">&#x27A4;</button>
+            <div class="btn-debug-wrap">
+              <button id="btn-debug-panel" class="btn-sm btn-debug" title="上下文用量 & 工具">&#x26A1;</button>
+            </div>
+          </div>
         </div>
       </div>
-      <div id="chat-input-area" class="chat-input-area">
-        <textarea id="input-msg" placeholder="输入消息...（Enter 发送，Shift+Enter 换行）" rows="1"></textarea>
-        <button id="btn-send" class="btn-send">&#x27A4;</button>
-      </div>
     </div>
-
     <!-- Interview Mode -->
     <div id="mode-interview" class="mode-content">
       <div class="chat-header">
         <button id="btn-toggle-sidebar-2" class="btn-icon">&#x2630;</button>
         <span class="chat-title">模拟面试</span>
-        <button id="btn-interview-history" class="btn-sm" style="margin-left:auto">历史记录</button>
+        <button id="btn-end-interview-header" class="btn-sm" style="color:var(--danger);border-color:var(--danger);display:none" title="结束面试并生成报告">&#x23F9; 结束面试</button>
       </div>
       <!-- Step Progress Bar -->
       <div class="interview-progress">

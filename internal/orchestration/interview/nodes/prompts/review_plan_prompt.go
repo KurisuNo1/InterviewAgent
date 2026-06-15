@@ -33,7 +33,6 @@ const ReviewPlanSystemPrompt = `## 角色定义
 必须输出纯 JSON 对象，不得包含任何其他文字：
 
 {
-  "session_id": "%s",
   "weak_areas": ["具体薄弱领域（可包含面试中暴露的问题描述）"],
   "plan_items": [
     {

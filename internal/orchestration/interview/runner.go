@@ -87,7 +87,7 @@ func (r *Runner) EvaluateAnswer(ctx context.Context, state *nodes.InterviewState
 	}
 
 	if state.NextAction == "complete" || state.Phase == model.PhaseCompleted || state.CurrentQIndex >= len(state.QuestionQueue) {
-		if planErr := r.nodes.ReviewPlanning.Execute(ctx, state); planErr != nil {
+		if planErr := r.nodes.ReviewPlanning.ExecuteLightweight(ctx, state); planErr != nil {
 			log.Printf("[Runner] Review planning warning: %v", planErr)
 		}
 	}

@@ -86,9 +86,19 @@
 .doc-section-title {
   font-size: 30rpx;
   font-weight: 700;
-  margin-bottom: 18rpx;
   color: var(--text-primary);
   padding: 0 4rpx;
+}
+
+.doc-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18rpx;
+}
+
+.doc-section-header .doc-section-title {
+  margin-bottom: 0;
 }
 
 .doc-item {

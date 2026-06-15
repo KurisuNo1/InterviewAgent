@@ -3,6 +3,91 @@ const app = getApp()
 
 const PHASE = { JD: 'jd', RESUME: 'resume', INTERVIEW: 'interview', REPORT: 'report' }
 
+const dimNames = {
+  'technical_accuracy': '基础知识',
+  'answer_depth': '回答深度',
+  'communication': '沟通表达',
+  'project_experience': '项目经验'
+}
+
+// Pre-compute display fields for history items so WXML only uses simple property access.
+function preprocessHistoryItem(s) {
+  var score = Number(s.overall_score) || 0
+  var preview = (s.last_message || s.status || '').replace(/\n/g, ' ').substring(0, 35)
+  if (!preview) preview = '(无消息)'
+  return {
+    id: s.id,
+    preview: preview,
+    scoreText: score.toFixed(1),
+    scoreClass: score >= 8 ? 'high' : score >= 5 ? 'mid' : 'low',
+    dateText: (s.created_at || '').substring(5, 16)
+  }
+}
+
+// Pre-compute display fields for report so WXML expressions stay simple.
+function preprocessReport(r) {
+  var dims = []
+  if (r.dimension_score) {
+    for (var k in r.dimension_score) {
+      var raw = r.dimension_score[k]
+      var sc = Math.round(raw * 10)
+      dims.push({
+        name: dimNames[k] || k,
+        score: sc,
+        pct: sc,
+        cls: sc >= 80 ? 'high' : sc >= 60 ? 'mid' : 'low'
+      })
+    }
+  }
+  var reviews = r.question_reviews || []
+  if (!reviews.length && r.evaluations && r.evaluations.length) {
+    reviews = []
+    for (var i = 0; i < r.evaluations.length; i++) {
+      var ev = r.evaluations[i]
+      var text = '第' + (i+1) + '题 (' + Math.round(ev.total_score*10) + '分)'
+      if (ev.praise) text += '\n✅ 亮点：' + ev.praise
+      if (ev.issues) text += '\n⚠️ 不足：' + ev.issues
+      if (ev.improvement) text += '\n💡 建议：' + ev.improvement
+      reviews.push(text)
+    }
+  }
+  var highlights = r.highlights || []
+  var weakAreas = r.weak_areas || []
+  var score100 = r.score_100 || Math.round((r.overall_score || 0) * 10)
+  return {
+    report: r,
+    dims: dims,
+    dimCommentary: r.overall_advice || '',
+    reviews: reviews,
+    score100: score100,
+    scoreClass: score100 >= 80 ? 'high' : score100 >= 60 ? 'mid' : 'low',
+    grade: r.grade || '',
+    highlights: highlights,
+    weakAreas: weakAreas
+  }
+}
+
+// Pre-compute plan display fields
+function preprocessPlan(p) {
+  if (!p) return null
+  return {
+    plan: p,
+    hasPlan: !!(p.plan_items && p.plan_items.length),
+    hasWeakAreas: !!(p.weak_areas && p.weak_areas.length),
+    hasResources: !!(p.resources && p.resources.length),
+    planItems: (p.plan_items || []).map(function(it) {
+      return {
+        topic: it.topic,
+        priority: it.priority,
+        estimated_hours: it.estimated_hours,
+        description: it.description,
+        priIcon: it.priority === 'high' ? '▲' : it.priority === 'medium' ? '■' : '●',
+        priClass: it.priority === 'high' ? 'high' : it.priority === 'medium' ? 'medium' : 'low'
+      }
+    })
+  }
+}
+
 Page({
   data: {
     phase: PHASE.JD,
@@ -22,12 +107,20 @@ Page({
     submitting: false,
     typing: false,
     progress: { current: 0, total: 5 },
-    // Report
+    // Report (pre-processed)
     report: null,
-    plan: null,
-    // History
+    planData: null,
+    dims: [],
+    dimCommentary: '',
+    reviews: [],
+    score100: 0,
+    scoreClass: '',
+    grade: '',
+    highlights: [],
+    weakAreas: [],
+    // History (pre-processed)
     historyList: [],
-    pendingSession: null,  // active session that can be resumed
+    pendingSession: null,
     kbHeight: 0
   },
 
@@ -44,22 +137,22 @@ Page({
   },
 
   async checkResume() {
-    const sid = app.globalData.interviewSessionID
+    var sid = app.globalData.interviewSessionID
     if (!sid) return
     try {
-      const r = await api.restoreSession(sid)
+      var r = await api.restoreSession(sid)
       if (r.code === 200 && r.data) {
-        const status = r.data.status || ''
+        var status = r.data.status || ''
         if (status === 'completed') {
-          this.setData({ phase: PHASE.REPORT, pendingSession: null })
-          this.loadReport()
+          app.globalData.interviewSessionID = ''
+          wx.removeStorageSync('ia_interview_sid')
+          this.setData({ phase: PHASE.JD, pendingSession: null })
+          this.loadHistory()
         } else if (status === 'interviewing') {
-          // Show pending session banner, let user choose to resume
           this.setData({ pendingSession: { id: sid, status: '面试进行中' }, phase: PHASE.JD })
         } else if (status === 'resume_matching') {
           this.setData({ pendingSession: { id: sid, status: '等待上传简历' }, phase: PHASE.JD })
         } else {
-          // created, jd_parsing, question_planning
           this.setData({ pendingSession: { id: sid, status: '未完成的面试' }, phase: PHASE.JD })
         }
       }
@@ -67,111 +160,144 @@ Page({
   },
 
   // === JD Analysis ===
-  onJDInput(e) { this.setData({ jdText: e.detail.value }) },
+  onJDInput: function(e) {
+    this.setData({ jdText: e.detail.value })
+  },
 
-  async startJD() {
-    const jd = this.data.jdText.trim()
-    if (!jd) return wx.showToast({ title: '请输入JD内容', icon: 'none' })
+  startJD: async function() {
+    var jd = this.data.jdText.trim()
+    if (!jd) {
+      wx.showToast({ title: '请输入JD内容', icon: 'none' })
+      return
+    }
     this.setData({ parsing: true })
 
     if (!app.globalData.interviewSessionID) {
-      const r = await api.createSession()
-      app.globalData.interviewSessionID = r.data.id
-      wx.setStorageSync('ia_interview_sid', r.data.id)
+      var cr = await api.createSession()
+      if (!cr || !cr.data || !cr.data.id) {
+        this.setData({ parsing: false })
+        wx.showToast({ title: '创建会话失败', icon: 'none' })
+        return
+      }
+      app.globalData.interviewSessionID = cr.data.id
+      wx.setStorageSync('ia_interview_sid', cr.data.id)
     }
 
     try {
-      const r = await api.parseJD(app.globalData.interviewSessionID, jd)
+      var r = await api.parseJD(app.globalData.interviewSessionID, jd)
       if (r.code === 200) {
         this.setData({ jdResult: r.data, phase: PHASE.RESUME, parsing: false, pendingSession: null })
         wx.showToast({ title: '解析完成', icon: 'success' })
       } else {
+        this.setData({ parsing: false })
         wx.showToast({ title: r.message || '解析失败', icon: 'none' })
       }
-    } catch (e) { wx.showToast({ title: '解析失败', icon: 'none' }) }
-    this.setData({ parsing: false })
+    } catch (e) {
+      this.setData({ parsing: false })
+      wx.showToast({ title: '解析失败', icon: 'none' })
+    }
   },
 
   // === Resume Upload ===
-  onResumeInput(e) { this.setData({ resumeText: e.detail.value }) },
+  onResumeInput: function(e) {
+    this.setData({ resumeText: e.detail.value })
+  },
 
-  async chooseResumeFile() {
-    const that = this
+  chooseResumeFile: function() {
+    var that = this
     wx.chooseMessageFile({
       count: 1,
-      type: 'file',
-      extension: ['pdf', 'txt', 'docx'],
-      success(res) {
-        const file = res.tempFiles[0]
-        const fs = wx.getFileSystemManager()
-        const data = fs.readFileSync(file.path, 'base64')
-        that.setData({ resumeText: '[文件: ' + file.name + ']', resumeFileData: data, resumeFileName: file.name })
+      type: 'all',
+      success: function(res) {
+        var file = res.tempFiles[0]
+        var fs = wx.getFileSystemManager()
+        var data = fs.readFileSync(file.path, 'base64')
+        that.setData({
+          resumeText: '[文件: ' + file.name + ']',
+          resumeFileData: data,
+          resumeFileName: file.name
+        })
       }
     })
   },
 
-  async uploadResume() {
-    const text = this.data.resumeText.trim()
-    if (!text) return wx.showToast({ title: '请上传简历或粘贴内容', icon: 'none' })
+  uploadResume: async function() {
+    var text = this.data.resumeText.trim()
+    if (!text) {
+      wx.showToast({ title: '请上传简历或粘贴内容', icon: 'none' })
+      return
+    }
 
-    let content = ''
-    let fileName = 'resume.txt'
+    var content, fileName
     if (this.data.resumeFileData) {
       content = this.data.resumeFileData
       fileName = this.data.resumeFileName
     } else {
       content = this.base64Encode(text)
+      fileName = 'resume.txt'
     }
     this.setData({ uploading: true })
 
     try {
-      const r = await api.uploadResume(app.globalData.interviewSessionID, fileName, content)
+      var r = await api.uploadResume(app.globalData.interviewSessionID, fileName, content)
       if (r.code === 200) {
-        this.setData({ resumeResult: r.data, pendingSession: null })
+        this.setData({ resumeResult: r.data, uploading: false, pendingSession: null })
         wx.showToast({ title: '匹配完成', icon: 'success' })
-        await this.startInterview()
+        this.startInterview()
       } else {
+        this.setData({ uploading: false })
         wx.showToast({ title: r.message || '匹配失败', icon: 'none' })
       }
-    } catch (e) { wx.showToast({ title: '上传失败', icon: 'none' }) }
-    this.setData({ uploading: false })
+    } catch (e) {
+      this.setData({ uploading: false })
+      wx.showToast({ title: '上传失败', icon: 'none' })
+    }
   },
 
-  base64Encode(str) {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='
-    let out = ''; let i = 0
-    const utf8 = unescape(encodeURIComponent(str))
+  // Return to JD phase with history list after interview completion.
+  // Clears the session so user can start a new interview.
+  finishInterview: function(msg) {
+    app.globalData.interviewSessionID = ''
+    wx.removeStorageSync('ia_interview_sid')
+    this.setData({ phase: PHASE.JD, messages: [], report: null, planData: null, pendingSession: null })
+    this.loadHistory()
+    if (msg) wx.showToast({ title: msg, icon: 'success' })
+  },
+
+  base64Encode: function(str) {
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='
+    var out = '', i = 0
+    var utf8 = unescape(encodeURIComponent(str))
     while (i < utf8.length) {
-      const a = utf8.charCodeAt(i++)
-      const b = utf8.charCodeAt(i++)
-      const c = utf8.charCodeAt(i++)
-      const i1 = a >> 2
-      const i2 = ((a & 3) << 4) | (b >> 4)
-      const i3 = isNaN(b) ? 64 : ((b & 15) << 2) | (c >> 6)
-      const i4 = isNaN(c) ? 64 : c & 63
+      var a = utf8.charCodeAt(i++)
+      var b = utf8.charCodeAt(i++)
+      var c = utf8.charCodeAt(i++)
+      var i1 = a >> 2
+      var i2 = ((a & 3) << 4) | (b >> 4)
+      var i3 = isNaN(b) ? 64 : ((b & 15) << 2) | (c >> 6)
+      var i4 = isNaN(c) ? 64 : c & 63
       out += chars.charAt(i1) + chars.charAt(i2) + chars.charAt(i3) + chars.charAt(i4)
     }
     return out
   },
 
   // === Resume pending session ===
-  async resumePendingSession() {
-    const sid = this.data.pendingSession.id
-    const status = this.data.pendingSession.status
+  resumePendingSession: async function() {
+    var sid = this.data.pendingSession.id
+    var status = this.data.pendingSession.status
     app.globalData.interviewSessionID = sid
     wx.setStorageSync('ia_interview_sid', sid)
 
     if (status === '面试进行中') {
       this.setData({ phase: PHASE.INTERVIEW, pendingSession: null })
-      await this.restoreInterview()
+      this.restoreInterview()
     } else if (status === '等待上传简历') {
       this.setData({ phase: PHASE.RESUME, pendingSession: null })
     } else {
-      // Try to figure out what phase we're in
       try {
-        const r = await api.restoreSession(sid)
+        var r = await api.restoreSession(sid)
         if (r.code === 200 && r.data) {
-          const s = r.data.status || ''
+          var s = r.data.status || ''
           if (s === 'resume_matching') this.setData({ phase: PHASE.RESUME, pendingSession: null })
           else this.setData({ phase: PHASE.JD, pendingSession: null })
         }
@@ -181,23 +307,22 @@ Page({
     }
   },
 
-  dismissPending() {
+  dismissPending: function() {
     app.globalData.interviewSessionID = ''
     wx.removeStorageSync('ia_interview_sid')
     this.setData({ pendingSession: null })
   },
 
   // === Interview ===
-  async startInterview() {
-    const prevPhase = this.data.phase
+  startInterview: async function() {
+    var prevPhase = this.data.phase
     this.setData({ phase: PHASE.INTERVIEW })
     try {
-      const r = await api.startInterview(app.globalData.interviewSessionID)
+      var r = await api.startInterview(app.globalData.interviewSessionID)
       if (r.code === 200) {
-        const data = r.data.data || r.data
+        var data = r.data.data || r.data
         if (r.data.type === 'complete') {
-          this.setData({ phase: PHASE.REPORT })
-          this.loadReport()
+          this.finishInterview('面试已完成，点击历史记录查看报告')
           return
         }
         this.addMessage('assistant', data)
@@ -211,24 +336,29 @@ Page({
     }
   },
 
-  async restoreInterview() {
-    const prevPhase = this.data.phase
+  restoreInterview: async function() {
+    var prevPhase = this.data.phase
     this.setData({ phase: PHASE.INTERVIEW, pendingSession: null })
 
-    // Load previous messages from the session
     try {
-      const msgR = await api.getMessages(app.globalData.interviewSessionID)
+      var msgR = await api.getMessages(app.globalData.interviewSessionID)
       if (msgR.code === 200 && msgR.data && msgR.data.length > 0) {
-        const msgs = msgR.data.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }))
+        var msgs = []
+        for (var i = 0; i < msgR.data.length; i++) {
+          msgs.push({
+            role: msgR.data[i].role === 'user' ? 'user' : 'assistant',
+            content: msgR.data[i].content
+          })
+        }
         this.setData({ messages: msgs })
       }
     } catch (e) { }
 
     try {
-      const r = await api.startInterview(app.globalData.interviewSessionID)
+      var r = await api.startInterview(app.globalData.interviewSessionID)
       if (r.code === 200) {
-        const data = r.data.data || r.data || ''
-        const resumeMsg = data ? '🔄 面试已恢复。\n\n' + data : '🔄 面试已恢复。继续回答当前问题。'
+        var data = r.data.data || r.data || ''
+        var resumeMsg = data ? '🔄 面试已恢复。\n\n' + data : '🔄 面试已恢复。继续回答当前问题。'
         this.addMessage('assistant', resumeMsg)
       } else {
         this.setData({ phase: prevPhase })
@@ -240,28 +370,32 @@ Page({
     }
   },
 
-  onAnswerInput(e) { this.setData({ answerText: e.detail.value }) },
+  onAnswerInput: function(e) {
+    this.setData({ answerText: e.detail.value })
+  },
 
-  onKBChange(e) {
+  onKBChange: function(e) {
     this.setData({ kbHeight: e.detail.height })
   },
 
-  async submitAnswer() {
-    const text = this.data.answerText.trim()
+  submitAnswer: async function() {
+    var text = this.data.answerText.trim()
     if (!text || this.data.submitting) return
     this.setData({ answerText: '', submitting: true })
     this.addMessage('user', text)
     this.setData({ typing: true })
 
     try {
-      const r = await api.submitAnswer(app.globalData.interviewSessionID, text)
+      var r = await api.submitAnswer(app.globalData.interviewSessionID, text)
       this.setData({ typing: false })
       if (r.code === 200) {
-        const d = r.data
+        var d = r.data
         this.addMessage('assistant', d.data || d)
         if (d.type === 'complete') {
-          wx.showToast({ title: '面试完成！', icon: 'success' })
-          setTimeout(() => { this.setData({ phase: PHASE.REPORT }); this.loadReport() }, 800)
+          var that = this
+          setTimeout(function() {
+            that.finishInterview('面试完成！点击历史记录查看报告')
+          }, 800)
         }
       }
     } catch (e) {
@@ -271,61 +405,90 @@ Page({
     this.setData({ submitting: false })
   },
 
-  async skipQ() {
-    try { await api.skipQuestion(app.globalData.interviewSessionID); this.startInterview() } catch (e) { }
+  skipQ: async function() {
+    try {
+      await api.skipQuestion(app.globalData.interviewSessionID)
+      this.startInterview()
+    } catch (e) { }
   },
 
-  async endInterview() {
-    const res = await new Promise(r => wx.showModal({ title: '结束面试', content: '确定要结束并生成报告吗？', success: r }))
+  endInterview: async function() {
+    var that = this
+    var res = await new Promise(function(r) {
+      wx.showModal({ title: '结束面试', content: '确定要结束并生成报告吗？', success: r })
+    })
     if (!res.confirm) return
     try {
-      const r = await api.endInterview(app.globalData.interviewSessionID)
+      var r = await api.endInterview(app.globalData.interviewSessionID)
       if (r.code === 200) {
-        this.setData({ phase: PHASE.REPORT })
-        this.loadReport()
+        that.finishInterview('报告生成中，请稍后点击历史记录查看')
       }
-    } catch (e) { wx.showToast({ title: '操作失败', icon: 'none' }) }
+    } catch (e) {
+      wx.showToast({ title: '操作失败', icon: 'none' })
+    }
   },
 
-  addMessage(role, content) {
-    const msgs = [...this.data.messages, { role, content }]
+  addMessage: function(role, content) {
+    var msgs = this.data.messages.concat([{ role: role, content: content }])
     this.setData({ messages: msgs })
   },
 
   // === Report ===
-  async loadReport() {
+  loadReport: async function() {
     try {
-      const [reportR, planR] = await Promise.all([
+      var results = await Promise.all([
         api.getReport(app.globalData.interviewSessionID),
         api.getReviewPlan(app.globalData.interviewSessionID)
       ])
-      if (reportR.code === 200) this.setData({ report: reportR.data })
-      if (planR.code === 200) this.setData({ plan: planR.data })
-    } catch (e) { wx.showToast({ title: '加载报告失败', icon: 'none' }) }
+      var reportR = results[0]
+      var planR = results[1]
+      var setDataObj = {}
+      if (reportR.code === 200) {
+        var processed = preprocessReport(reportR.data)
+        for (var k in processed) {
+          setDataObj[k] = processed[k]
+        }
+      }
+      if (planR.code === 200) {
+        setDataObj.planData = preprocessPlan(planR.data)
+      }
+      this.setData(setDataObj)
+    } catch (e) {
+      wx.showToast({ title: '加载报告失败', icon: 'none' })
+    }
   },
 
-  viewPastReport(e) {
-    const sid = e.currentTarget.dataset.sid
+  viewPastReport: function(e) {
+    var sid = e.currentTarget.dataset.sid
     wx.navigateTo({ url: '/pages/report/report?sid=' + sid })
   },
 
-  async loadHistory() {
+  loadHistory: async function() {
     try {
-      const r = await api.listSessions()
+      var r = await api.listSessions()
       if (r.code === 200 && r.data) {
-        const items = r.data.filter(s => s.overall_score > 0).slice(0, 20)
+        var items = []
+        for (var i = 0; i < r.data.length; i++) {
+          if (r.data[i].overall_score > 0 || (r.data[i].last_message && r.data[i].status !== 'created')) {
+            items.push(preprocessHistoryItem(r.data[i]))
+          }
+        }
+        items = items.slice(0, 20)
         this.setData({ historyList: items })
       }
     } catch (e) { }
   },
 
-  newInterview() {
+  newInterview: function() {
     app.globalData.interviewSessionID = ''
     wx.removeStorageSync('ia_interview_sid')
-    this.setData({ phase: PHASE.JD, jdResult: null, resumeResult: null, messages: [], report: null, plan: null, pendingSession: null })
+    this.setData({
+      phase: PHASE.JD, jdResult: null, resumeResult: null,
+      messages: [], report: null, planData: null, pendingSession: null
+    })
   },
 
-  skipResume() {
+  skipResume: function() {
     this.startInterview()
   }
 })

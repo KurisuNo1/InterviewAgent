@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/eino/components/retriever"
 	"github.com/cloudwego/eino/schema"
 	"github.com/KurisuNo1/InterviewAgent/internal/model"
+	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/contextmanager"
 	"github.com/KurisuNo1/InterviewAgent/internal/orchestration/rag"
 )
 
@@ -21,15 +22,17 @@ type Host struct {
 	specialists     map[Intent]Specialist
 	hybridRetriever retriever.Retriever
 	embedder        embedding.Embedder
+	ctxMonitor      contextmanager.ContextMonitor
 }
 
 // NewHost creates a new intent routing host.
-func NewHost(chatModel einomodel.ToolCallingChatModel, hybridRetriever retriever.Retriever, embedder embedding.Embedder) *Host {
+func NewHost(chatModel einomodel.ToolCallingChatModel, hybridRetriever retriever.Retriever, embedder embedding.Embedder, ctxMonitor contextmanager.ContextMonitor) *Host {
 	return &Host{
 		chatModel:       chatModel,
 		specialists:     make(map[Intent]Specialist),
 		hybridRetriever: hybridRetriever,
 		embedder:        embedder,
+		ctxMonitor:      ctxMonitor,
 	}
 }
 
@@ -56,6 +59,21 @@ func (h *Host) Classify(ctx context.Context, sessionID string, message string, h
 	resp, err := h.chatModel.Generate(ctx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("intent classification failed: %w", err)
+	}
+
+	// Report context usage to monitor
+	if h.ctxMonitor != nil {
+		totalTokens := 0
+		for _, m := range prompt {
+			totalTokens += contextmanager.EstimateTokens(m.Content)
+		}
+		h.ctxMonitor.RecordUsage(sessionID, "intent_classify", contextmanager.ContextUsage{
+			SystemPromptTokens: contextmanager.EstimateTokens(intentClassificationPrompt),
+			HistoryTokens:       totalTokens - contextmanager.EstimateTokens(intentClassificationPrompt) - contextmanager.EstimateTokens(message),
+			InputTokens:         contextmanager.EstimateTokens(message),
+			TotalTokens:          totalTokens,
+			WindowLimit:          8192,
+		})
 	}
 
 	var result ClassificationResult

@@ -47,6 +47,8 @@ type Orchestrator struct {
 	mcpBridge       *mcp.EinoBridge
 	ctxBuilder      *contextmanager.ContextBuilder
 	memHierarchy    *contextmanager.MemoryHierarchy
+	overflowHandler *contextmanager.OverflowHandler
+	ctxMonitor      *contextmanager.DefaultMonitor
 
 	mu     sync.RWMutex
 	states map[string]*nodes.InterviewState
@@ -114,6 +116,8 @@ func NewOrchestrator(
 	casualAgent *react.Agent,
 	ctxBuilder *contextmanager.ContextBuilder,
 	memHierarchy *contextmanager.MemoryHierarchy,
+	overflowHandler *contextmanager.OverflowHandler,
+	ctxMonitor *contextmanager.DefaultMonitor,
 ) *Orchestrator {
 	o := &Orchestrator{
 		intentRouter:    intentRouter,
@@ -130,6 +134,8 @@ func NewOrchestrator(
 		casualAgent:     casualAgent,
 		ctxBuilder:      ctxBuilder,
 		memHierarchy:    memHierarchy,
+		overflowHandler: overflowHandler,
+		ctxMonitor:      ctxMonitor,
 		states:          make(map[string]*nodes.InterviewState),
 		events:          newEventBus(),
 	}
@@ -336,7 +342,7 @@ func (o *Orchestrator) StartInterview(ctx context.Context, sessionID string) (*i
 				state.FinalReport = o.buildReportFromState(state)
 			}
 			if state.ReviewPlan == nil {
-				if err := o.interviewRunner.Graph().ReviewPlanning.Execute(ctx, state); err != nil {
+				if err := o.interviewRunner.Graph().ReviewPlanning.ExecuteLightweight(ctx, state); err != nil {
 					log.Printf("Warning: review planning on complete failed: %v", err)
 				}
 			}
@@ -429,38 +435,70 @@ func (o *Orchestrator) SubmitAnswer(ctx context.Context, sessionID string, answe
 		result.Type = "complete"
 	}
 
+	// If the decision is next_question, immediately ask the next question and append it
+	if action == "next_question" && !isComplete {
+		// Check if ProcessAnswer already leaked the next question into its response.
+		// LLMs sometimes ignore "do NOT output the next question" instructions.
+		// If the response already contains the question text, skip AskCurrentQuestion.
+		dup := false
+		if state.CurrentQIndex < len(state.QuestionQueue) {
+			qContent := state.QuestionQueue[state.CurrentQIndex].Content
+			if len(qContent) > 60 && len(response) > len(qContent)/2 &&
+				strings.Contains(response, qContent[:60]) {
+				dup = true
+				log.Printf("[SubmitAnswer] next question already in ProcessAnswer response, skipping AskCurrentQuestion")
+			}
+		}
+		if !dup {
+			nextQ, qErr := o.interviewRunner.AskCurrentQuestion(ctx, state)
+			if qErr != nil {
+				log.Printf("[SubmitAnswer] AskCurrentQuestion failed: %v", qErr)
+				response = response + "\n\n[系统提示：下一题生成失败，请刷新页面重试]"
+			} else {
+				response = response + "\n\n" + nextQ
+			}
+		}
+		result.Data = response
+	}
+
 	// Publish event to WebSocket subscribers immediately
 	o.events.publish(sessionID, result)
 
 	if isComplete {
-		// Interview complete: run evaluation SYNCHRONOUSLY so the report is ready
-		o.interviewRunner.EvaluateAnswer(ctx, state)
-
-		// Always build a report, even if evaluations are empty
-		if state.FinalReport == nil {
-			state.FinalReport = o.buildReportFromState(state)
-		}
-		o.setState(sessionID, state)
-		o.interviewRunner.SaveCheckpoint(ctx, state)
-
-		// Always persist to DB so the report survives restarts
-		if o.memory != nil {
-			o.memory.UpdateSessionStatus(ctx, sessionID, model.PhaseCompleted)
-			if err := o.memory.SaveInterviewResult(ctx, state.FinalReport, state.ReviewPlan); err != nil {
-				log.Printf("[SubmitAnswer] Warning: failed to persist report: %v", err)
-			}
-		}
-		// Archive conversation summary (async)
-		if o.memHierarchy != nil {
-			go o.memHierarchy.ArchiveSessionSummary(context.Background(), sessionID, state.ChatHistory)
-		}
-	} else {
-		// Normal answer: save state immediately, run evaluation async for lower latency
+		// Interview complete: save state immediately, then run evaluation + review planning
+		// asynchronously with background context to avoid HTTP context cancellation.
+		// The frontend will fetch the report separately via GET /sessions/{id}/report.
 		o.setState(sessionID, state)
 		o.interviewRunner.SaveCheckpoint(ctx, state)
 
 		go func() {
 			bgCtx := context.Background()
+			o.interviewRunner.EvaluateAnswer(bgCtx, state)
+
+			if state.FinalReport == nil {
+				state.FinalReport = o.buildReportFromState(state)
+			}
+			o.setState(sessionID, state)
+			o.interviewRunner.SaveCheckpoint(bgCtx, state)
+
+			if o.memory != nil {
+				o.memory.UpdateSessionStatus(bgCtx, sessionID, model.PhaseCompleted)
+				if err := o.memory.SaveInterviewResult(bgCtx, state.FinalReport, state.ReviewPlan); err != nil {
+					log.Printf("[SubmitAnswer] Warning: failed to persist report: %v", err)
+				}
+			}
+			if o.memHierarchy != nil {
+				o.memHierarchy.ArchiveSessionSummary(bgCtx, sessionID, state.ChatHistory)
+			}
+		}()
+	} else {
+		// Normal answer: save state to memory immediately, then persist checkpoint
+		// with background context so it survives even if the HTTP request times out.
+		o.setState(sessionID, state)
+
+		go func() {
+			bgCtx := context.Background()
+			o.interviewRunner.SaveCheckpoint(bgCtx, state)
 			o.interviewRunner.EvaluateAnswer(bgCtx, state)
 			o.setState(sessionID, state)
 			o.interviewRunner.SaveCheckpoint(bgCtx, state)
@@ -470,6 +508,7 @@ func (o *Orchestrator) SubmitAnswer(ctx context.Context, sessionID string, answe
 				profile := contextmanager.Profile(nil, "interview_ask")
 				if len(state.ChatHistory)/2 > profile.CompressionThreshold {
 					compressed := o.ctxBuilder.Build(contextmanager.BuildParams{
+						SessionID:    sessionID,
 						ProfileName: "interview_ask",
 						History:     state.ChatHistory,
 						UserInput:   "",
@@ -580,34 +619,47 @@ func (o *Orchestrator) CompleteInterview(ctx context.Context, sessionID string) 
 	state.Phase = model.PhaseCompleted
 	state.NextAction = "complete"
 
-	// Run pending evaluation synchronously
-	o.interviewRunner.EvaluateAnswer(ctx, state)
-
-	// Build report from whatever evaluations we have
-	if state.FinalReport == nil {
-		state.FinalReport = o.buildReportFromState(state)
-	}
-
-	// Persist
+	// Save state to memory immediately and return response to the user.
+	// Run evaluation and persistence asynchronously with background context
+	// so they survive HTTP timeout/cancellation.
 	o.setState(sessionID, state)
-	o.interviewRunner.SaveCheckpoint(ctx, state)
 
-	if o.memory != nil {
-		o.memory.UpdateSessionStatus(ctx, sessionID, model.PhaseCompleted)
-		if err := o.memory.SaveInterviewResult(ctx, state.FinalReport, state.ReviewPlan); err != nil {
-			log.Printf("[CompleteInterview] Warning: failed to persist report: %v", err)
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+
+		o.interviewRunner.EvaluateAnswer(bgCtx, state)
+
+		if state.FinalReport == nil {
+			state.FinalReport = o.buildReportFromState(state)
 		}
-	}
 
-	// Archive conversation as a summarized session (async)
-	if o.memHierarchy != nil {
-		go o.memHierarchy.ArchiveSessionSummary(context.Background(), sessionID, state.ChatHistory)
-	}
+		// Generate review plan alongside the report so it's persisted once,
+		// not re-generated on every GetReviewPlan query.
+		if state.ReviewPlan == nil && len(state.Evaluations) > 0 {
+			if err := o.interviewRunner.Graph().ReviewPlanning.ExecuteLightweight(bgCtx, state); err != nil {
+				log.Printf("[CompleteInterview] Warning: review plan generation failed: %v", err)
+			}
+		}
+
+		o.setState(sessionID, state)
+		o.interviewRunner.SaveCheckpoint(bgCtx, state)
+
+		if o.memory != nil {
+			o.memory.UpdateSessionStatus(bgCtx, sessionID, model.PhaseCompleted)
+			if err := o.memory.SaveInterviewResult(bgCtx, state.FinalReport, state.ReviewPlan); err != nil {
+				log.Printf("[CompleteInterview] Warning: failed to persist report: %v", err)
+			}
+		}
+		if o.memHierarchy != nil {
+			o.memHierarchy.ArchiveSessionSummary(bgCtx, sessionID, state.ChatHistory)
+		}
+	}()
 
 	return &interaction.InterviewEvent{
 		Type:      "complete",
 		SessionID: sessionID,
-		Data:      "面试已结束，报告已生成。",
+		Data:      "面试已结束，报告即将生成。",
 	}, nil
 }
 
@@ -675,25 +727,8 @@ func (o *Orchestrator) GetReviewPlan(ctx context.Context, sessionID string) (*mo
 
 	// Fall back to checkpoint
 	state, err = o.interviewRunner.LoadCheckpoint(ctx, sessionID)
-	if err == nil && state != nil {
-		if state.ReviewPlan != nil {
-			return state.ReviewPlan, nil
-		}
-		// Try to generate review plan on-the-fly if evaluations exist
-		if len(state.Evaluations) > 0 {
-			if state.FinalReport == nil {
-				state.FinalReport = o.buildReportFromState(state)
-			}
-			if err := o.interviewRunner.Graph().ReviewPlanning.Execute(ctx, state); err != nil {
-				log.Printf("Warning: on-the-fly review planning failed: %v", err)
-			} else {
-				o.setState(sessionID, state)
-				if o.memory != nil {
-					o.memory.SaveInterviewResult(ctx, state.FinalReport, state.ReviewPlan)
-				}
-				return state.ReviewPlan, nil
-			}
-		}
+	if err == nil && state != nil && state.ReviewPlan != nil {
+		return state.ReviewPlan, nil
 	}
 
 	// Final fallback: long-term database
@@ -706,6 +741,36 @@ func (o *Orchestrator) GetReviewPlan(ctx context.Context, sessionID string) (*mo
 	}
 
 	return nil, fmt.Errorf("review plan not found for session %s", sessionID)
+}
+
+// GetContextStats returns aggregated context usage stats across all sessions.
+func (o *Orchestrator) GetContextStats(ctx context.Context) (*interaction.ContextStats, error) {
+	if o.ctxMonitor == nil {
+		return &interaction.ContextStats{}, nil
+	}
+	snap := o.ctxMonitor.Snapshot()
+	return &interaction.ContextStats{
+		TotalCalls:      snap.TotalCalls,
+		AvgUsagePercent: snap.AvgUsagePercent,
+		MaxUsagePercent: snap.MaxUsagePercent,
+		WarningCount:    snap.WarningCount,
+		CriticalCount:   snap.CriticalCount,
+	}, nil
+}
+
+// GetSessionContextStats returns context usage stats for a specific session.
+func (o *Orchestrator) GetSessionContextStats(ctx context.Context, sessionID string) (*interaction.ContextStats, error) {
+	if o.ctxMonitor == nil {
+		return &interaction.ContextStats{}, nil
+	}
+	snap := o.ctxMonitor.SnapshotSession(sessionID)
+	return &interaction.ContextStats{
+		TotalCalls:      snap.TotalCalls,
+		AvgUsagePercent: snap.AvgUsagePercent,
+		MaxUsagePercent: snap.MaxUsagePercent,
+		WarningCount:    snap.WarningCount,
+		CriticalCount:   snap.CriticalCount,
+	}, nil
 }
 
 // buildReportFromState constructs a report from in-memory evaluations.
@@ -1008,6 +1073,7 @@ func (o *Orchestrator) StreamMessage(ctx context.Context, sessionID string, msg 
 	var messages []*schema.Message
 	if o.ctxBuilder != nil {
 		messages = o.ctxBuilder.Build(contextmanager.BuildParams{
+			SessionID:    sessionID,
 			ProfileName:  "stream_fallback",
 			SystemPrompt: systemPrompt,
 			History:      history,
@@ -1112,6 +1178,7 @@ func (o *Orchestrator) streamViaAgent(ctx context.Context, sessionID string, msg
 	var einoMsgs []*schema.Message
 	if o.ctxBuilder != nil {
 		einoMsgs = o.ctxBuilder.Build(contextmanager.BuildParams{
+			SessionID:    sessionID,
 			ProfileName:  "stream_agent",
 			SystemPrompt: systemPrompt,
 			History:      history,
@@ -1141,10 +1208,15 @@ func (o *Orchestrator) streamViaAgent(ctx context.Context, sessionID string, msg
 
 	// Use agent.Generate (not Stream) because DeepSeek outputs text before
 	// tool calls, which the default StreamToolCallChecker cannot handle.
+	// Apply a 30s timeout — the agent may loop tool calls and exceed the
+	// browser's fetch timeout, causing "failed to fetch" on the frontend.
 	log.Printf("[stream-agent] calling agent.Generate(%d msgs)", len(einoMsgs))
-	resp, err := o.casualAgent.Generate(ctx, einoMsgs)
+	agentCtx, agentCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer agentCancel()
+	resp, err := o.casualAgent.Generate(agentCtx, einoMsgs)
 	if err != nil {
-		return nil, fmt.Errorf("agent generate failed: %w", err)
+		log.Printf("[stream-agent] agent.Generate failed, falling back to direct LLM: %v", err)
+		return o.streamFallback(ctx, sessionID, msg, systemPrompt, ragDocs, history)
 	}
 	if resp == nil {
 		return nil, fmt.Errorf("agent returned nil response")
@@ -1156,6 +1228,41 @@ func (o *Orchestrator) streamViaAgent(ctx context.Context, sessionID string, msg
 		writer.Close()
 	}()
 	return o.wrapStreamForMemory(ctx, sessionID, reader), nil
+}
+
+// streamFallback is a direct LLM stream used when the agent times out or fails.
+func (o *Orchestrator) streamFallback(ctx context.Context, sessionID string, msg string, systemPrompt string, ragDocs string, history []model.Message) (*schema.StreamReader[*schema.Message], error) {
+	log.Printf("[stream-fallback] using direct LLM stream for session=%s", sessionID)
+
+	var messages []*schema.Message
+	if o.ctxBuilder != nil {
+		messages = o.ctxBuilder.Build(contextmanager.BuildParams{
+			SessionID:    sessionID,
+			ProfileName:  "stream_fallback",
+			SystemPrompt: systemPrompt,
+			History:      history,
+			RAGDocuments: ragDocs,
+			UserInput:    msg,
+		})
+	} else {
+		if ragDocs != "" {
+			systemPrompt += "\n\n## Reference Knowledge\n" + ragDocs
+		}
+		messages = []*schema.Message{schema.SystemMessage(systemPrompt)}
+		for _, m := range history {
+			messages = append(messages, &schema.Message{Role: schema.RoleType(m.Role), Content: m.Content})
+		}
+		messages = append(messages, schema.UserMessage(msg))
+	}
+
+	stream, err := o.chatModel.Stream(ctx, messages)
+	if err != nil {
+		return nil, fmt.Errorf("stream fallback failed: %w", err)
+	}
+	if stream == nil {
+		return nil, fmt.Errorf("chat model returned nil stream")
+	}
+	return o.wrapStreamForMemory(ctx, sessionID, stream), nil
 }
 
 // ListSessions implements interaction.InterviewService.

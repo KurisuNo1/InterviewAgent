@@ -71,6 +71,7 @@ func (h *CasualChatSpecialist) Handle(ctx context.Context, sessionID string, inp
 	var messages []*schema.Message
 	if h.ctxBuilder != nil {
 		messages = h.ctxBuilder.Build(contextmanager.BuildParams{
+			SessionID:    sessionID,
 			ProfileName:  "casual_chat",
 			SystemPrompt: systemPrompt,
 			History:      history,

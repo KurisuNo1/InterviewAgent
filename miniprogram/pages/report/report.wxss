@@ -1,6 +1,12 @@
 /* ===== Page Layout ===== */
+.report-scroll {
+  height: 100vh;
+  background: var(--bg-primary);
+}
+
 .report-content {
   padding: 26rpx;
+  padding-bottom: 60rpx;
   animation: slideUp 0.4s ease-out;
 }
 

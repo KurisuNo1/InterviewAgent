@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/flow/agent/react"
@@ -34,22 +36,23 @@ func NewReviewPlanningNode(chatModel einomodel.ToolCallingChatModel, githubMCP *
 	}
 }
 
-// Execute generates a review plan and populates the state.
-func (n *ReviewPlanningNode) Execute(ctx context.Context, state *InterviewState) error {
+// ExecuteLightweight generates a review plan using direct LLM + manual MCP (no ReAct agent).
+// Use this to avoid the agent exceeding max steps on resource search loops.
+func (n *ReviewPlanningNode) ExecuteLightweight(ctx context.Context, state *InterviewState) error {
 	if len(state.Evaluations) == 0 {
 		return fmt.Errorf("no evaluations to base review plan on")
 	}
 
-	// Calculate overall score and weak areas
 	report := buildReport(state)
 	state.FinalReport = report
 
-	// Search for learning resources — use agent if available, otherwise manual MCP search
-	var resources []model.Resource
-	if n.agent != nil {
-		resources = n.searchWithAgent(ctx, report.WeakAreas)
-	} else {
-		resources = n.searchResources(ctx, report.WeakAreas)
+	// Manual MCP search with timeout (best-effort). External search can
+	// take 30s+, so bound it tightly so the LLM call gets enough budget.
+	searchCtx, searchCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer searchCancel()
+	resources := n.searchResources(searchCtx, report.WeakAreas)
+	if len(resources) == 0 {
+		log.Printf("[ReviewPlanning] ExecuteLightweight: no resources found for weak areas: %v", report.WeakAreas)
 	}
 
 	resourcesJSON, _ := json.Marshal(resources)
@@ -61,7 +64,60 @@ func (n *ReviewPlanningNode) Execute(ctx context.Context, state *InterviewState)
 		report.WeakAreas,
 		string(evalJSON),
 		string(resourcesJSON),
-		state.SessionID,
+	)
+
+	// Direct LLM call, never via agent
+	resp, err := n.chatModel.Generate(ctx, []*schema.Message{
+		schema.SystemMessage(prompt),
+		schema.UserMessage("Please create a personalized review plan in JSON format."),
+	})
+	if err != nil {
+		return fmt.Errorf("review planning (lightweight) failed: %w", err)
+	}
+
+	var plan model.ReviewPlan
+	if err := json.Unmarshal([]byte(extractJSON(resp.Content)), &plan); err != nil {
+		return fmt.Errorf("failed to parse review plan: %w", err)
+	}
+	plan.SessionID = state.SessionID
+
+	state.ReviewPlan = &plan
+	state.Phase = model.PhaseCompleted
+	return nil
+}
+
+// Execute generates a review plan and populates the state.
+// Prefer ExecuteLightweight for on-the-fly generation to avoid agent step limits.
+func (n *ReviewPlanningNode) Execute(ctx context.Context, state *InterviewState) error {
+	if len(state.Evaluations) == 0 {
+		return fmt.Errorf("no evaluations to base review plan on")
+	}
+
+	// Calculate overall score and weak areas
+	report := buildReport(state)
+	state.FinalReport = report
+
+	// Search for learning resources — best-effort, failures must not block the plan
+	var resources []model.Resource
+	if n.agent != nil {
+		resources = n.searchWithAgent(ctx, report.WeakAreas)
+	} else {
+		resources = n.searchResources(ctx, report.WeakAreas)
+	}
+	// If resource search returned nothing (e.g. agent exceeded max steps), log and continue
+	if len(resources) == 0 {
+		log.Printf("[ReviewPlanning] No resources found for weak areas: %v — generating plan without external resources", report.WeakAreas)
+	}
+
+	resourcesJSON, _ := json.Marshal(resources)
+	evalJSON, _ := json.Marshal(state.Evaluations)
+
+	prompt := safeFmt(prompts.ReviewPlanSystemPrompt,
+		report.OverallScore,
+		report.DimensionScore,
+		report.WeakAreas,
+		string(evalJSON),
+		string(resourcesJSON),
 	)
 
 	resp, err := n.callLLM(ctx, prompt)
@@ -73,6 +129,7 @@ func (n *ReviewPlanningNode) Execute(ctx context.Context, state *InterviewState)
 	if err := json.Unmarshal([]byte(extractJSON(resp.Content)), &plan); err != nil {
 		return fmt.Errorf("failed to parse review plan: %w", err)
 	}
+	plan.SessionID = state.SessionID
 
 	state.ReviewPlan = &plan
 	state.Phase = model.PhaseCompleted

@@ -120,4 +120,17 @@ type InterviewService interface {
 
 	// Subscribe to real-time events for a session
 	Subscribe(ctx context.Context, sessionID string) (<-chan *InterviewEvent, error)
+
+	// Context usage monitoring
+	GetContextStats(ctx context.Context) (*ContextStats, error)
+	GetSessionContextStats(ctx context.Context, sessionID string) (*ContextStats, error)
+}
+
+// ContextStats is the aggregated context usage statistics exposed via API.
+type ContextStats struct {
+	TotalCalls      int     `json:"total_calls"`
+	AvgUsagePercent float64 `json:"avg_usage_percent"`
+	MaxUsagePercent float64 `json:"max_usage_percent"`
+	WarningCount    int     `json:"warning_count"`
+	CriticalCount   int     `json:"critical_count"`
 }

@@ -23,6 +23,12 @@ func NewMemoryHierarchy(mgr *memory.Manager, compressor *ConversationCompressor)
 	return &MemoryHierarchy{mgr: mgr, compressor: compressor}
 }
 
+// MemoryContext bundles history and summary for ContextBuilder consumption.
+type MemoryContext struct {
+	History []model.Message
+	Summary string // compressed summary of older conversation; empty if not needed
+}
+
 // FetchWorkingMemory loads conversation history from short-term storage
 // and prepares it for ContextBuilder consumption.
 // window is the number of recent messages to fetch.
@@ -36,6 +42,29 @@ func (h *MemoryHierarchy) FetchWorkingMemory(ctx context.Context, sessionID stri
 		return nil, nil
 	}
 	return msgs, nil
+}
+
+// FetchContext loads history and, when appropriate, returns a compressed summary
+// for injection into the system prompt via ContextBuilder.
+func (h *MemoryHierarchy) FetchContext(ctx context.Context, sessionID string, window int) (*MemoryContext, error) {
+	msgs, err := h.FetchWorkingMemory(ctx, sessionID, window)
+	if err != nil {
+		return nil, err
+	}
+
+	mc := &MemoryContext{History: msgs}
+
+	// Generate summary if history is long enough
+	if h.compressor != nil && len(msgs) > 12 {
+		if h.compressor.ShouldCompress(msgs, 16384) {
+			summary, err := h.compressor.SummarizeWithLLM(ctx, msgs[:len(msgs)-6])
+			if err == nil && summary != "" {
+				mc.Summary = summary
+			}
+		}
+	}
+
+	return mc, nil
 }
 
 // ArchiveSessionSummary generates and persists a summary after a session ends.

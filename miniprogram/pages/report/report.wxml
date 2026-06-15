@@ -1,4 +1,4 @@
-<view class="container">
+<scroll-view class="report-scroll" scroll-y enhanced show-scrollbar="{{true}}">
   <view wx:if="{{loading}}" class="loading-text">加载中...</view>
 
   <view wx:elif="{{error}}" class="error-state">
@@ -6,22 +6,19 @@
   </view>
 
   <view wx:elif="{{report}}" class="report-content">
-    <!-- Score -->
     <view class="score-center">
-      <view class="score-circle {{score100>=80?'high':score100>=60?'mid':'low'}}">
+      <view class="score-circle {{scoreClass}}">
         <text class="score-num">{{score100}}</text>
         <text class="score-total">/100</text>
       </view>
       <text class="score-grade">{{grade}}级</text>
     </view>
 
-    <!-- Summary -->
     <view wx:if="{{summary}}" class="section">
       <view class="section-title">📝 综合评价</view>
       <text class="section-text">{{summary}}</text>
     </view>
 
-    <!-- Dimension scores -->
     <view wx:if="{{dims.length}}" class="section">
       <view class="section-title">📊 各维度得分</view>
       <view wx:for="{{dims}}" wx:key="name" class="dim-row">
@@ -33,30 +30,26 @@
       </view>
     </view>
 
-    <!-- Highlights -->
     <view wx:if="{{highlights.length}}" class="section">
       <view class="section-title">⭐ 优势</view>
       <view wx:for="{{highlights}}" wx:key="*this" class="bullet-item">• {{item}}</view>
     </view>
 
-    <!-- Weak areas -->
     <view wx:if="{{weakAreas.length}}" class="section">
       <view class="section-title">🎯 待提升</view>
       <view wx:for="{{weakAreas}}" wx:key="*this" class="bullet-item">• {{item}}</view>
     </view>
 
-    <!-- Per-question reviews -->
     <view wx:if="{{reviews.length}}" class="section">
       <view class="section-title">💬 逐题点评</view>
       <view wx:for="{{reviews}}" wx:key="*this" class="review-item">{{item}}</view>
     </view>
 
-    <!-- Review Plan -->
-    <view wx:if="{{plan&&plan.plan_items}}" class="section">
+    <view wx:if="{{planData.hasPlanItems}}" class="section">
       <view class="section-title">📚 复习计划</view>
-      <view wx:for="{{plan.plan_items}}" wx:key="topic" wx:for-item="pi" class="plan-item">
+      <view wx:for="{{planData.planItems}}" wx:key="topic" wx:for-item="pi" class="plan-item">
         <view class="plan-header">
-          <text class="plan-pri">{{pi.priority==='high'?'🔴':pi.priority==='medium'?'🟡':'🟢'}}</text>
+          <text class="plan-pri">{{pi.priIcon}}</text>
           <text class="plan-topic">{{pi.topic}}</text>
           <text class="plan-hours">{{pi.estimated_hours}}h</text>
         </view>
@@ -64,14 +57,13 @@
       </view>
     </view>
 
-    <!-- Resources -->
-    <view wx:if="{{plan&&plan.resources&&plan.resources.length}}" class="section">
+    <view wx:if="{{planData.hasResources}}" class="section">
       <view class="section-title">🔗 推荐资源</view>
-      <view wx:for="{{plan.resources}}" wx:key="url" wx:for-item="res" class="resource-item">
+      <view wx:for="{{planData.plan.resources}}" wx:key="url" wx:for-item="res" class="resource-item">
         <text class="res-title">{{res.title}}</text>
         <text class="res-meta">{{res.type}} · {{res.source}}</text>
         <text wx:if="{{res.description}}" class="res-desc">{{res.description}}</text>
       </view>
     </view>
   </view>
-</view>
+</scroll-view>

@@ -12,25 +12,35 @@ import (
 
 // BuildParams holds all inputs needed to assemble a context window for an LLM call.
 type BuildParams struct {
-	ProfileName string          // e.g. "casual_chat", "interview_ask", "skill"
-	SystemPrompt string          // the base system prompt (before state injection)
-	StateContext map[string]any  // key-value pairs injected into system prompt
-	History      []model.Message // full conversation history (uncompressed)
-	RAGDocuments string          // pre-retrieved reference text
-	CurrentQ     string          // current question content (interview only)
-	LastAnswer   string          // candidateʼs last answer (interview/eval only)
-	UserInput    string          // the current user message
+	SessionID     string          // optional: session for per-session context monitoring
+	ProfileName   string          // e.g. "casual_chat", "interview_ask", "skill"
+	SystemPrompt  string          // the base system prompt (before state injection)
+	StateContext  map[string]any  // key-value pairs injected into system prompt
+	MemorySummary string          // optional: compressed summary from memory hierarchy
+	KeyEntities   string          // optional: key entities extracted from conversation
+	History       []model.Message // full conversation history (uncompressed)
+	RAGDocuments  string          // pre-retrieved reference text
+	CurrentQ      string          // current question content (interview only)
+	LastAnswer    string          // candidateʼs last answer (interview/eval only)
+	UserInput     string          // the current user message
 }
 
 // ContextBuilder assembles LLM prompts with budget awareness, compression, and priority-based packing.
 type ContextBuilder struct {
 	cfg        *config.ContextConfig
 	compressor *ConversationCompressor
+	monitor    ContextMonitor
+	lastUsage  ContextUsage
 }
 
 // NewContextBuilder creates a new context builder.
-func NewContextBuilder(cfg *config.ContextConfig, compressor *ConversationCompressor) *ContextBuilder {
-	return &ContextBuilder{cfg: cfg, compressor: compressor}
+func NewContextBuilder(cfg *config.ContextConfig, compressor *ConversationCompressor, monitor ContextMonitor) *ContextBuilder {
+	return &ContextBuilder{cfg: cfg, compressor: compressor, monitor: monitor}
+}
+
+// LastUsage returns the token usage from the most recent Build call.
+func (b *ContextBuilder) LastUsage() ContextUsage {
+	return b.lastUsage
 }
 
 // Build assembles the final message list for an LLM call, respecting the token budget.
@@ -74,25 +84,53 @@ func (b *ContextBuilder) Build(params BuildParams) []*schema.Message {
 		params.ProfileName, budget.Limit(), budget.Used(),
 		budget.Allocated()["system"], budget.Allocated()["rag"], budget.Allocated()["history"])
 
+	// Store usage for external monitoring.
+	// Note: system budget already includes MemorySummary and KeyEntities since
+	// buildSystemPrompt injects them before token estimation.
+	b.lastUsage = ContextUsage{
+		SystemPromptTokens: budget.Allocated()["system"],
+		HistoryTokens:       budget.Allocated()["history"],
+		RAGDocTokens:        budget.Allocated()["rag"],
+		ToolResultTokens:     budget.Allocated()["tool_result"],
+		InputTokens:          EstimateTokens(params.UserInput),
+		TotalTokens:          budget.Used(),
+		WindowLimit:          budget.Limit(),
+	}
+
+	// Auto-report to monitor if configured
+	if b.monitor != nil {
+		b.monitor.RecordUsage(params.SessionID, params.ProfileName, b.lastUsage)
+	}
+
 	return messages
 }
 
 // buildSystemPrompt assembles the full system prompt with state context injection.
 func (b *ContextBuilder) buildSystemPrompt(params BuildParams) string {
-	prompt := params.SystemPrompt
+	var sb strings.Builder
+	sb.WriteString(params.SystemPrompt)
+
+	// Inject key entities first (critical information that must be remembered)
+	if params.KeyEntities != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(params.KeyEntities)
+	}
+
+	// Inject memory summary (compressed conversation from prior interactions)
+	if params.MemorySummary != "" {
+		sb.WriteString("\n\n## Conversation Context\n")
+		sb.WriteString(params.MemorySummary)
+	}
 
 	// Inject state context as key-value pairs
 	if len(params.StateContext) > 0 {
-		var sb strings.Builder
-		sb.WriteString(prompt)
 		sb.WriteString("\n\n## Current State\n")
 		for key, val := range params.StateContext {
 			sb.WriteString(fmt.Sprintf("- %s: %v\n", key, val))
 		}
-		prompt = sb.String()
 	}
 
-	return prompt
+	return sb.String()
 }
 
 // packHistory builds the history portion of the prompt with compression if needed.
@@ -141,6 +179,9 @@ func (b *ContextBuilder) packHistory(history []model.Message, userInput string, 
 	var result []*schema.Message
 	histTokens := 0
 	for _, m := range finalMsgs {
+		if m.Role == "" || m.Content == "" {
+			continue
+		}
 		tok := EstimateTokens(m.Content)
 		if histTokens+tok > historyBudget {
 			break

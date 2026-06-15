@@ -1,6 +1,16 @@
 const api = require('../../utils/api')
 const app = getApp()
 
+function preprocessChatHistory(s) {
+  var preview = (s.last_message || '').replace(/\n/g, ' ').substring(0, 40)
+  if (!preview) preview = '(无消息)'
+  var metaText = (s.created_at || '').substring(5, 16)
+  if (s.overall_score > 0) {
+    metaText += ' · ' + Number(s.overall_score).toFixed(1) + '分'
+  }
+  return { id: s.id, preview: preview, metaText: metaText }
+}
+
 Page({
   data: {
     messages: [],
@@ -13,55 +23,56 @@ Page({
     historyList: []
   },
 
-  onLoad() {
+  onLoad: function() {
     this.initChat()
   },
 
-  onShow() {
+  onShow: function() {
     if (!app.globalData.token) {
       wx.reLaunch({ url: '/pages/login/login' })
       return
     }
-    // Refresh history list when tab is shown
     if (this.data.showHistory) this.loadHistory()
   },
 
-  async initChat() {
-    const sid = app.globalData.chatSessionID
-    if (sid) {
-      try {
-        const r = await api.getMessages(sid)
-        if (r.code === 200 && r.data && r.data.length > 0) {
-          const msgs = r.data.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }))
-          this.setData({ messages: msgs, scrollToId: 'msg-' + (msgs.length - 1) })
+  initChat: async function() {
+    var sid = app.globalData.chatSessionID
+    if (!sid) return
+    try {
+      var r = await api.getMessages(sid)
+      if (r.code === 200 && r.data && r.data.length > 0) {
+        var msgs = []
+        for (var i = 0; i < r.data.length; i++) {
+          msgs.push({
+            role: r.data[i].role === 'user' ? 'user' : 'assistant',
+            content: r.data[i].content
+          })
         }
-      } catch (e) { }
-    }
+        this.setData({ messages: msgs, scrollToId: 'msg-' + (msgs.length - 1) })
+      }
+    } catch (e) { }
   },
 
-  onInput(e) {
+  onInput: function(e) {
     this.setData({ inputText: e.detail.value })
   },
 
-  onKBChange(e) {
+  onKBChange: function(e) {
     this.setData({ kbHeight: e.detail.height })
-    if (e.detail.height > 0) {
-      this.scrollToBottom()
-    }
+    if (e.detail.height > 0) this.scrollToBottom()
   },
 
-  async sendMessage() {
-    const text = this.data.inputText.trim()
+  sendMessage: async function() {
+    var text = this.data.inputText.trim()
     if (!text || this.data.sending) return
-
     this.setData({ inputText: '', sending: true })
 
-    const msgs = [...this.data.messages, { role: 'user', content: text }]
+    var msgs = this.data.messages.concat([{ role: 'user', content: text }])
     this.setData({ messages: msgs, scrollToId: 'msg-' + (msgs.length - 1) })
 
     if (!app.globalData.chatSessionID) {
       try {
-        const r = await api.createSession()
+        var r = await api.createSession()
         app.globalData.chatSessionID = r.data.id
         wx.setStorageSync('ia_chat_sid', r.data.id)
       } catch (e) {
@@ -71,14 +82,14 @@ Page({
       }
     }
 
-    this.setData({ typing: true, scrollToId: 'msg-' + (msgs.length) })
+    this.setData({ typing: true, scrollToId: 'msg-' + msgs.length })
 
     try {
-      const r = await api.sendMessage(app.globalData.chatSessionID, text)
+      var r2 = await api.sendMessage(app.globalData.chatSessionID, text)
       this.setData({ typing: false })
-      if (r.code === 200) {
-        const reply = r.data.reply || r.data.data || ''
-        const newMsgs = [...this.data.messages, { role: 'assistant', content: reply }]
+      if (r2.code === 200) {
+        var reply = r2.data.reply || r2.data.data || ''
+        var newMsgs = this.data.messages.concat([{ role: 'assistant', content: reply }])
         this.setData({ messages: newMsgs, scrollToId: 'msg-' + (newMsgs.length - 1) })
       }
     } catch (e) {
@@ -88,45 +99,56 @@ Page({
     this.setData({ sending: false })
   },
 
-  async newChat() {
+  newChat: function() {
     app.globalData.chatSessionID = ''
     wx.removeStorageSync('ia_chat_sid')
     this.setData({ messages: [] })
   },
 
-  scrollToBottom() {
-    const len = this.data.messages.length
+  scrollToBottom: function() {
+    var len = this.data.messages.length
     this.setData({ scrollToId: len > 0 ? 'msg-' + (len - 1) : 'msg-bottom' })
   },
 
-  // === History ===
-  async showHistoryPanel() {
+  showHistoryPanel: async function() {
     this.setData({ showHistory: true })
     await this.loadHistory()
   },
 
-  hideHistoryPanel() {
+  hideHistoryPanel: function() {
     this.setData({ showHistory: false })
   },
 
-  async loadHistory() {
+  loadHistory: async function() {
     try {
-      const r = await api.listSessions()
+      var r = await api.listSessions()
       if (r.code === 200 && r.data) {
-        const items = r.data.filter(s => s.last_message || s.status !== 'created').slice(0, 30)
+        var items = []
+        for (var i = 0; i < r.data.length; i++) {
+          if (r.data[i].last_message || r.data[i].status !== 'created') {
+            items.push(preprocessChatHistory(r.data[i]))
+          }
+        }
+        items = items.slice(0, 30)
         this.setData({ historyList: items })
       }
     } catch (e) { }
   },
 
-  async restoreChatSession(e) {
-    const sid = e.currentTarget.dataset.sid
+  restoreChatSession: async function(e) {
+    var sid = e.currentTarget.dataset.sid
     try {
-      const r = await api.getMessages(sid)
+      var r = await api.getMessages(sid)
       if (r.code === 200 && r.data && r.data.length > 0) {
         app.globalData.chatSessionID = sid
         wx.setStorageSync('ia_chat_sid', sid)
-        const msgs = r.data.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }))
+        var msgs = []
+        for (var i = 0; i < r.data.length; i++) {
+          msgs.push({
+            role: r.data[i].role === 'user' ? 'user' : 'assistant',
+            content: r.data[i].content
+          })
+        }
         this.setData({ messages: msgs, scrollToId: 'msg-' + (msgs.length - 1), showHistory: false })
         wx.showToast({ title: '会话已恢复', icon: 'success' })
       } else {

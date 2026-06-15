@@ -13,19 +13,22 @@ import (
 // It discovers all tools from configured MCP servers and provides them
 // as Eino InvokableTool instances, so all MCP calls flow through Eino.
 type EinoBridge struct {
-	manager         *Manager
-	tools           map[string]tool.InvokableTool // fullName (server_tool) -> tool
-	toolCallback    callbacks.Handler             // injected into every EinoTool
+	manager      *Manager
+	tools        map[string]tool.InvokableTool // fullName (server_tool) -> tool
+	toolCallback callbacks.Handler             // injected into every EinoTool
+	resultFilter ResultFilter                  // optional tool result post-processing
 }
 
 // NewEinoBridge creates a bridge and discovers all tools from the MCP manager.
 // toolHandler is a callbacks.Handler (built via callbacks.NewHandlerBuilder)
 // that will be invoked at OnStart/OnEnd/OnError for every MCP tool invocation.
-func NewEinoBridge(ctx context.Context, manager *Manager, toolHandler callbacks.Handler) *EinoBridge {
+// resultFilter is an optional filter applied to tool results before they enter LLM context.
+func NewEinoBridge(ctx context.Context, manager *Manager, toolHandler callbacks.Handler, resultFilter ResultFilter) *EinoBridge {
 	bridge := &EinoBridge{
 		manager:      manager,
 		tools:        make(map[string]tool.InvokableTool),
 		toolCallback: toolHandler,
+		resultFilter: resultFilter,
 	}
 	bridge.discoverTools(ctx)
 	return bridge
@@ -40,7 +43,7 @@ func (b *EinoBridge) discoverTools(ctx context.Context) {
 			continue
 		}
 		for _, def := range tools {
-			einoTool := NewEinoTool(serverName, def, b.manager, b.toolCallback)
+			einoTool := NewEinoTool(serverName, def, b.manager, b.toolCallback, b.resultFilter)
 			fullName := serverName + "_" + def.Name
 			b.tools[fullName] = einoTool
 		}

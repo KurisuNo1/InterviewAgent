@@ -4,9 +4,7 @@
     <view class="card-title">岗位描述 (JD)</view>
     <text class="card-desc">输入目标岗位的 JD 内容，AI 将分析岗位要求并生成面试题。</text>
 
-    <!-- Resume pending session banner -->
     <view wx:if="{{pendingSession}}" class="resume-banner">
-      <view class="resume-banner-icon">!</view>
       <view class="resume-banner-body">
         <text class="resume-banner-text">你有未完成的面试（{{pendingSession.status}}）</text>
         <view class="resume-banner-actions">
@@ -17,15 +15,18 @@
     </view>
 
     <textarea class="jd-input" value="{{jdText}}" placeholder="粘贴岗位 JD 内容..." bindinput="onJDInput"/>
-    <button class="btn-primary" bindtap="startJD" loading="{{parsing}}" disabled="{{parsing}}">{{parsing ? '解析中...' : '开始解析'}}</button>
+    <button class="btn-primary" bindtap="startJD" loading="{{parsing}}" disabled="{{parsing}}">
+      <text wx:if="{{parsing}}">解析中...</text>
+      <text wx:else>开始解析</text>
+    </button>
 
     <view wx:if="{{historyList.length}}" style="margin-top:44rpx">
       <view class="section-title">历史记录</view>
       <view wx:for="{{historyList}}" wx:key="id" class="hist-item" data-sid="{{item.id}}" bindtap="viewPastReport">
-        <text class="hist-preview">{{item.last_message||item.status}}</text>
+        <text class="hist-preview">{{item.preview}}</text>
         <view class="hist-row">
-          <text class="hist-score {{item.overall_score>=8?'high':item.overall_score>=5?'mid':'low'}}">{{item.overall_score.toFixed(1)}}分</text>
-          <text class="hist-date">{{item.created_at}}</text>
+          <text class="hist-score {{item.scoreClass}}">{{item.scoreText}}分</text>
+          <text class="hist-date">{{item.dateText}}</text>
         </view>
       </view>
     </view>
@@ -44,15 +45,18 @@
           <text class="jd-level">{{jdResult.level||'未指定级别'}}</text>
         </view>
       </view>
-      <view wx:if="{{jdResult.tech_stack&&jdResult.tech_stack.length}}" class="jd-divider"></view>
-      <view wx:if="{{jdResult.tech_stack&&jdResult.tech_stack.length}}" class="tags">
+      <view wx:if="{{jdResult.tech_stack.length}}" class="jd-divider"></view>
+      <view wx:if="{{jdResult.tech_stack.length}}" class="tags">
         <text wx:for="{{jdResult.tech_stack}}" wx:key="*this" class="tag">{{item}}</text>
       </view>
     </view>
 
     <button class="btn-secondary" bindtap="chooseResumeFile" style="margin-bottom:20rpx">选择文件</button>
     <textarea class="jd-input" value="{{resumeText}}" placeholder="或直接粘贴简历内容..." bindinput="onResumeInput"/>
-    <button class="btn-primary" bindtap="uploadResume" loading="{{uploading}}" disabled="{{uploading}}">{{uploading ? '分析中...' : '上传并匹配'}}</button>
+    <button class="btn-primary" bindtap="uploadResume" loading="{{uploading}}" disabled="{{uploading}}">
+      <text wx:if="{{uploading}}">分析中...</text>
+      <text wx:else>上传并匹配</text>
+    </button>
     <button class="btn-secondary" bindtap="skipResume" style="margin-top:16rpx">跳过，直接面试</button>
   </view>
 
@@ -95,10 +99,8 @@
     <view wx:if="{{report}}" class="report-section">
       <view class="card-title">面试评估报告</view>
       <view class="score-center">
-        <view class="score-big {{report.score_100>=80?'high':report.score_100>=60?'mid':'low'}}">
-          {{report.score_100||(report.overall_score*10)}}<text class="score-unit">/100</text>
-        </view>
-        <text class="score-grade">{{report.grade||''}}级</text>
+        <view class="score-big {{scoreClass}}">{{score100}}<text class="score-unit">/100</text></view>
+        <text class="score-grade">{{grade}}级</text>
       </view>
 
       <view wx:if="{{report.summary}}" class="section">
@@ -106,35 +108,54 @@
         <text class="section-text">{{report.summary}}</text>
       </view>
 
-      <view wx:if="{{report.highlights&&report.highlights.length}}" class="section">
+      <view wx:if="{{dims.length}}" class="section">
+        <view class="section-title">各维度得分</view>
+        <view wx:for="{{dims}}" wx:key="name" class="dim-row">
+          <text class="dim-name">{{item.name}}</text>
+          <view class="dim-bar-wrap">
+            <view class="dim-fill {{item.cls}}" style="width:{{item.pct}}%"></view>
+          </view>
+          <text class="dim-val">{{item.score}}</text>
+        </view>
+      </view>
+
+      <view wx:if="{{dimCommentary}}" class="section">
+        <text class="section-text" style="font-size:26rpx;color:var(--text-muted)">{{dimCommentary}}</text>
+      </view>
+
+      <view wx:if="{{highlights.length}}" class="section">
         <view class="section-title">优势</view>
-        <view wx:for="{{report.highlights}}" wx:key="*this" class="bullet-item">{{item}}</view>
+        <view wx:for="{{highlights}}" wx:key="*this" class="bullet-item">{{item}}</view>
       </view>
 
-      <view wx:if="{{report.weak_areas&&report.weak_areas.length}}" class="section">
+      <view wx:if="{{weakAreas.length}}" class="section">
         <view class="section-title">待提升</view>
-        <view wx:for="{{report.weak_areas}}" wx:key="*this" class="bullet-item">{{item}}</view>
+        <view wx:for="{{weakAreas}}" wx:key="*this" class="bullet-item">{{item}}</view>
       </view>
 
-      <view wx:if="{{report.question_reviews&&report.question_reviews.length}}" class="section">
+      <view wx:if="{{reviews.length}}" class="section">
         <view class="section-title">逐题点评</view>
-        <view wx:for="{{report.question_reviews}}" wx:key="*this" class="review-item">{{item}}</view>
+        <view wx:for="{{reviews}}" wx:key="*this" class="review-item">{{item}}</view>
       </view>
 
       <!-- Review Plan -->
-      <view wx:if="{{plan}}" class="section" style="margin-top:30rpx">
+      <view wx:if="{{planData.hasPlan}}" class="section" style="margin-top:30rpx">
         <view class="section-title">复习计划</view>
-        <view wx:for="{{plan.plan_items}}" wx:key="topic" class="plan-item">
+        <view wx:if="{{planData.hasWeakAreas}}" style="margin-bottom:12rpx">
+          <text style="color:var(--text-muted);font-size:26rpx">重点提升：</text>
+          <text wx:for="{{planData.plan.weak_areas}}" wx:key="*this" class="tag" style="border:1rpx solid var(--danger);color:var(--danger);margin:4rpx">{{item}}</text>
+        </view>
+        <view wx:for="{{planData.planItems}}" wx:key="topic" class="plan-item">
           <view class="plan-header">
-            <text class="plan-priority {{item.priority}}">{{item.priority==='high'?'▲':item.priority==='medium'?'■':'●'}}</text>
+            <text class="plan-priority {{item.priClass}}">{{item.priIcon}}</text>
             <text class="plan-topic">{{item.topic}}</text>
             <text class="plan-hours">{{item.estimated_hours}}h</text>
           </view>
           <text class="plan-desc">{{item.description}}</text>
         </view>
-        <view wx:if="{{plan.resources&&plan.resources.length}}" class="section">
+        <view wx:if="{{planData.hasResources}}" class="section">
           <view class="section-title">推荐资源</view>
-          <view wx:for="{{plan.resources}}" wx:key="url" class="resource-item">
+          <view wx:for="{{planData.plan.resources}}" wx:key="url" class="resource-item">
             <text class="res-title">{{item.title}}</text>
             <text class="res-meta">{{item.type}}  {{item.source}}</text>
             <text wx:if="{{item.description}}" class="res-desc">{{item.description}}</text>

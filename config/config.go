@@ -168,8 +168,10 @@ type LongTermMemConfig struct {
 
 // ContextConfig holds LLM context window management settings.
 type ContextConfig struct {
-	MaxTokens    int                       `mapstructure:"max_tokens"`
-	Profiles     map[string]ContextProfile `mapstructure:"profiles"`
+	MaxTokens          int                       `mapstructure:"max_tokens"`
+	WarningThreshold   float64                   `mapstructure:"warning_threshold"`
+	CriticalThreshold  float64                   `mapstructure:"critical_threshold"`
+	Profiles           map[string]ContextProfile `mapstructure:"profiles"`
 }
 
 // ContextProfile defines token allocation for a specific LLM call path.
